@@ -10,11 +10,13 @@ REF_DIR = Path("C:/git-repositories/leok610/ref/doc")
 
 # Valid text formats found in the reference repository
 VALID_EXTENSIONS = [
-    "rst", "md", "txt", "py", "html", "conf", 
-    "css", "mmd", "ps1", "yaml", "inc", "js", "json", "xml"
+    "rst", "md", "txt", "py", "conf", 
+    "ps1", "yaml", "inc", "js", "json"
 ]
 
-@click.command()
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
+
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("extensions", nargs=-1, type=click.Choice(VALID_EXTENSIONS, case_sensitive=False))
 def main(extensions):
     """

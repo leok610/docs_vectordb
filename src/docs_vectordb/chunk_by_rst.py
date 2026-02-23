@@ -25,48 +25,56 @@ setup_shared_logging(chunking_log)
 
 def print_log(message: str):
     """Logs a message to the shared chunking log."""
-    logging.info(f"[INDENT] {message}")
+    logging.info(f"[RST] {message}")
 
-def get_indent(line: str) -> int:
-    """Returns the number of leading spaces on a line."""
-    return len(line) - len(line.lstrip(" "))
+def is_underline(line: str) -> bool:
+    """Checks if a line is a Sphinx header underline."""
+    line = line.strip()
+    if len(line) < 3:
+        return False
+    return len(set(line)) == 1 and line[0] in "=-~^*+#\"'."
 
-def process_single_indent(file_path: Path, output_dir: Path) -> int:
+def process_single_rst(file_path: Path, output_dir: Path) -> int:
     """
-    Worker function to process a single glossary/indent-style file.
+    Worker function to process a single .rst file.
     
     Side-effects:
         - Reads from `file_path`.
-        - Writes to `{output_dir}/{file_path.stem}_chunks.json` using `write_chunks_to_json`.
+        - Writes to `{output_dir}/{file_path.stem}_rst_chunks.json` using `write_chunks_to_json`.
         
     Args:
-        file_path (Path): Path to the source document.
+        file_path (Path): Path to the source .rst document.
         output_dir (Path): Path to the destination directory for chunks.
         
     Returns:
         int: Total number of chunks written.
     """
-    glossary_units = []
-    current_unit: list[str] = []
-    
-    with file_path.open("r", encoding="utf-8") as t:
-        for line in t:
-            clean_text = line.strip()
-            if not clean_text or clean_text.startswith(".."):
-                continue
-                
-            indent = get_indent(line)
-            
-            if indent == 3:
-                if current_unit:
-                    glossary_units.append(current_unit)
-                current_unit = [clean_text]
-            elif indent >= 6:
-                if current_unit is not None and len(current_unit) > 0:
-                    current_unit.append(clean_text)
+    with file_path.open("r", encoding="utf-8", errors="ignore") as t:
+        lines = [line.rstrip() for line in t]
 
-        if current_unit:
-            glossary_units.append(current_unit)
+    units = []
+    current_unit: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        start_new_unit = False
+        
+        if line.lstrip().startswith(".."):
+            start_new_unit = True
+        elif i + 1 < len(lines) and is_underline(lines[i+1]):
+            if line.strip():
+                start_new_unit = True
+
+        if start_new_unit:
+            if current_unit and any(l.strip() for l in current_unit):
+                units.append(current_unit)
+            current_unit = [line]
+        else:
+            current_unit.append(line)
+        i += 1
+
+    if current_unit and any(l.strip() for l in current_unit):
+        units.append(current_unit)
 
     MAX_LINES = 20
     OVERLAP = 5
@@ -74,7 +82,7 @@ def process_single_indent(file_path: Path, output_dir: Path) -> int:
     current_chunk_lines: list[str] = []
     
     processed_units = []
-    for unit in glossary_units:
+    for unit in units:
         if len(unit) > MAX_LINES:
             processed_units.extend(split_long_unit(unit, MAX_LINES, OVERLAP))
         else:
@@ -91,9 +99,10 @@ def process_single_indent(file_path: Path, output_dir: Path) -> int:
     if current_chunk_lines:
         chunks_lists.append(current_chunk_lines)
 
-    final_chunks = [" ".join(chunk_lines) for chunk_lines in chunks_lists]
-    
-    output_path = output_dir / f"{file_path.stem}_chunks.json"
+    final_chunks = ["\n".join(chunk_lines).strip() for chunk_lines in chunks_lists]
+    final_chunks = [c for c in final_chunks if c]
+
+    output_path = output_dir / f"{file_path.stem}_rst_chunks.json"
     return write_chunks_to_json(final_chunks, output_path)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
@@ -103,7 +112,7 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 @click.option("--async-mode/--sync-mode", default=False, help="Run processing asynchronously")
 def main(file_paths, async_mode):
     """
-    Parses indent-based files into chunks.
+    Parses RST files into chunks. 
     Accepts a single .json list of paths or multiple raw paths.
     Outputs JSON logs to chunks_dir.
     """
@@ -112,7 +121,7 @@ def main(file_paths, async_mode):
         print_log("No files provided.")
         return
 
-    print_log(f"=== Starting INDENT Chunking Run: {get_timestamp()} ===")
+    print_log(f"=== Starting RST Chunking Run: {get_timestamp()} ===")
     print_log(f"Processing {len(paths)} files (Async={async_mode})...")
     
     chunks_dir = project_root / "chunks"
@@ -121,9 +130,9 @@ def main(file_paths, async_mode):
     start_time = time.time()
     
     if async_mode:
-        total_chunks = asyncio.run(process_files_async(process_single_indent, paths, chunks_dir))
+        total_chunks = asyncio.run(process_files_async(process_single_rst, paths, chunks_dir))
     else:
-        total_chunks = process_files_sync(process_single_indent, paths, chunks_dir)
+        total_chunks = process_files_sync(process_single_rst, paths, chunks_dir)
         
     duration = time.time() - start_time
     print_log(f"Finished! Processed {len(paths)} files into {total_chunks} chunks in {duration:.2f} seconds.")

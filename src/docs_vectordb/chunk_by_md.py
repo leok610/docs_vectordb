@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 import logging
 from pathlib import Path
@@ -25,48 +26,50 @@ setup_shared_logging(chunking_log)
 
 def print_log(message: str):
     """Logs a message to the shared chunking log."""
-    logging.info(f"[INDENT] {message}")
+    logging.info(f"[MD] {message}")
 
-def get_indent(line: str) -> int:
-    """Returns the number of leading spaces on a line."""
-    return len(line) - len(line.lstrip(" "))
+def is_header(line: str) -> bool:
+    """Checks if a string starts with a markdown header (e.g. '## Header')."""
+    return bool(re.match(r"^#{1,6}\s", line))
 
-def process_single_indent(file_path: Path, output_dir: Path) -> int:
+def process_single_md(file_path: Path, output_dir: Path) -> int:
     """
-    Worker function to process a single glossary/indent-style file.
+    Worker function to process a single .md file.
     
     Side-effects:
         - Reads from `file_path`.
-        - Writes to `{output_dir}/{file_path.stem}_chunks.json` using `write_chunks_to_json`.
+        - Writes to `{output_dir}/{file_path.stem}_md_chunks.json` using `write_chunks_to_json`.
         
     Args:
-        file_path (Path): Path to the source document.
+        file_path (Path): Path to the source .md document.
         output_dir (Path): Path to the destination directory for chunks.
         
     Returns:
         int: Total number of chunks written.
     """
-    glossary_units = []
+    with file_path.open("r", encoding="utf-8", newline="\n") as t:
+        text = t.read()
+        
+    paragraphs = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
+
+    units = []
     current_unit: list[str] = []
     
-    with file_path.open("r", encoding="utf-8") as t:
-        for line in t:
-            clean_text = line.strip()
-            if not clean_text or clean_text.startswith(".."):
-                continue
-                
-            indent = get_indent(line)
+    for para in paragraphs:
+        if is_header(para) and current_unit:
+            units.append(current_unit)
+            current_unit = []
             
-            if indent == 3:
-                if current_unit:
-                    glossary_units.append(current_unit)
-                current_unit = [clean_text]
-            elif indent >= 6:
-                if current_unit is not None and len(current_unit) > 0:
-                    current_unit.append(clean_text)
+        lines = para.split("\n")
+        current_unit.extend(lines)
+        current_unit.append("")
 
-        if current_unit:
-            glossary_units.append(current_unit)
+    if current_unit:
+        units.append(current_unit)
+
+    for unit in units:
+        while unit and unit[-1] == "":
+            unit.pop()
 
     MAX_LINES = 20
     OVERLAP = 5
@@ -74,7 +77,7 @@ def process_single_indent(file_path: Path, output_dir: Path) -> int:
     current_chunk_lines: list[str] = []
     
     processed_units = []
-    for unit in glossary_units:
+    for unit in units:
         if len(unit) > MAX_LINES:
             processed_units.extend(split_long_unit(unit, MAX_LINES, OVERLAP))
         else:
@@ -87,13 +90,16 @@ def process_single_indent(file_path: Path, output_dir: Path) -> int:
             current_chunk_lines = []
             
         current_chunk_lines.extend(unit)
+        if current_chunk_lines and current_chunk_lines[-1] != "":
+            current_chunk_lines.append("")
         
     if current_chunk_lines:
         chunks_lists.append(current_chunk_lines)
 
-    final_chunks = [" ".join(chunk_lines) for chunk_lines in chunks_lists]
-    
-    output_path = output_dir / f"{file_path.stem}_chunks.json"
+    final_chunks = ["\n".join(chunk_lines).strip() for chunk_lines in chunks_lists]
+    final_chunks = [c for c in final_chunks if c]
+
+    output_path = output_dir / f"{file_path.stem}_md_chunks.json"
     return write_chunks_to_json(final_chunks, output_path)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
@@ -103,7 +109,7 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 @click.option("--async-mode/--sync-mode", default=False, help="Run processing asynchronously")
 def main(file_paths, async_mode):
     """
-    Parses indent-based files into chunks.
+    Parses Markdown files into chunks.
     Accepts a single .json list of paths or multiple raw paths.
     Outputs JSON logs to chunks_dir.
     """
@@ -112,7 +118,7 @@ def main(file_paths, async_mode):
         print_log("No files provided.")
         return
 
-    print_log(f"=== Starting INDENT Chunking Run: {get_timestamp()} ===")
+    print_log(f"=== Starting MD Chunking Run: {get_timestamp()} ===")
     print_log(f"Processing {len(paths)} files (Async={async_mode})...")
     
     chunks_dir = project_root / "chunks"
@@ -121,9 +127,9 @@ def main(file_paths, async_mode):
     start_time = time.time()
     
     if async_mode:
-        total_chunks = asyncio.run(process_files_async(process_single_indent, paths, chunks_dir))
+        total_chunks = asyncio.run(process_files_async(process_single_md, paths, chunks_dir))
     else:
-        total_chunks = process_files_sync(process_single_indent, paths, chunks_dir)
+        total_chunks = process_files_sync(process_single_md, paths, chunks_dir)
         
     duration = time.time() - start_time
     print_log(f"Finished! Processed {len(paths)} files into {total_chunks} chunks in {duration:.2f} seconds.")

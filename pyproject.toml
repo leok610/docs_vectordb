@@ -23,11 +23,15 @@ packages = ["src/docs_vectordb"]
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu130"
 
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "types-requests>=2.31.0.6",
+]
+
 [tool.hatch.build.targets.editable]
 path = ["src"]
 
 [project.scripts]
-chunk-indents = "docs_vectordb.chunk_by_indents:main"
+database-healthcheck = "docs_vectordb.healthcheck:main"
 doc-retrieval = "docs_vectordb.doc_retrieval:main"
-embed-and-store = "docs_vectordb.embed_and_store:main"
-generate-vectordb = "docs_vectordb.generate_vectordb:main"

@@ -1,69 +1,106 @@
 import json
+import os
+import logging
 import lancedb
+import time
 from pathlib import Path
 import rich_click as click
-from rich import print
+from rich.console import Console
 from rich.traceback import install as trace_install
+from .chunking_utils import get_timestamp, setup_shared_logging
+
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+
 from sentence_transformers import SentenceTransformer
 
 trace_install()
 
-# Delay model loading until inside the main function to avoid slow startups
-# if someone just wants to run --help
-uri = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
-db = lancedb.connect(uri=uri)
+project_root = Path(__file__).parent.parent.parent
+logs_dir = project_root / "logs"
+logs_dir.mkdir(exist_ok=True)
+embedding_log = logs_dir / "embedding.log"
+setup_shared_logging(embedding_log)
 
-@click.command()
-@click.argument("file_path", type=click.Path(path_type=Path))
-def main(file_path: Path):
-    """Reads a JSON chunk file, embeds as vectors, and stores in LanceDB."""
+def print_log(message: str):
+    """Logs a message to the shared embedding log."""
+    logging.info(f"[PYTORCH] {message}")
+
+URI = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
+TABLE_NAME = "reference_docs"
+
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
+
+@click.command(context_settings=CONTEXT_SETTINGS, help="""
+    Reads a JSON file containing chunk file paths, embeds as vectors using PyTorch (local model), 
+    and stores in LanceDB.
+    """)
+@click.argument("file_paths_json", type=click.Path(path_type=Path, exists=True))
+def main(file_paths_json):
+    print_log(f"=== Starting PyTorch Embedding Run: {get_timestamp()} ===")
     
-    chunk_file = file_path.absolute()
-    
-    if not chunk_file.exists():
-        print(f"[red]Error: Target file not found at {chunk_file}[/red]")
-        raise click.Abort()
-
-    print(f"Reading chunks from: [cyan]{chunk_file}[/cyan]")
-
-    # Load chunks from JSON
-    with chunk_file.open("r", encoding="utf-8") as f:
-        chunks = json.load(f)
+    with file_paths_json.open("r", encoding="utf-8-sig") as f:
+        file_paths = [Path(p) for p in json.load(f)]
         
-    print(f"Loaded [green]{len(chunks)}[/green] chunks. Loading embedding model...")
+    if not file_paths:
+        return
+        
+    db = lancedb.connect(uri=URI)
+    table_exists = TABLE_NAME in db.list_tables()
     
-    # Initialize the model right before we need it
     model = SentenceTransformer("all-mpnet-base-v2")
+    
+    total_inserted = 0
+    start_time = time.time()
+    
+    for chunk_file in file_paths:
+        if not chunk_file.exists():
+            continue
 
-    print(f"Generating embeddings using device: [yellow]{model.device}[/yellow]...")
-    
-    # We pass the entire list of chunks to encode() to process them efficiently in a batch
-    embeddings = model.encode(chunks)
-    
-    print("Preparing data for LanceDB insertion...")
-    
-    data = []
-    # Use the source filename to keep track of where these chunks came from
-    source_name = chunk_file.stem.replace("_chunks", "")
-    
-    for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-        data.append({
-            "id": f"{source_name}_{i:04d}",
-            "source_doc": source_name,
-            "text": chunk_text,
-            "vector": embedding.tolist() # Convert NumPy array to Python list
-        })
+        with chunk_file.open("r", encoding="utf-8") as f:
+            chunks = json.load(f)
+            
+        if not chunks:
+            continue
+            
+        embeddings = model.encode(chunks)
         
-    # Using the source name as the table name (e.g., 'glossary')
-    table_name = source_name
+        data = []
+        source_name = chunk_file.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
+        
+        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+            data.append({
+                "id": f"{source_name}_{i:04d}",
+                "source_doc": source_name,
+                "text": chunk_text,
+                "vector": embedding.tolist()
+            })
+            
+        if table_exists:
+            table = db.open_table(TABLE_NAME)
+            table.add(data)
+        else:
+            db.create_table(TABLE_NAME, data=data)
+            table_exists = True
+            
+        total_inserted += len(data)
+        print_log(f"Processed {source_name}: {len(data)} vectors.")
+        
+    duration = time.time() - start_time
     
-    print(f"Storing {len(data)} records in LanceDB table: [cyan]'{table_name}'[/cyan]...")
-    
-    # Create or overwrite the table
-    db.create_table(table_name, data=data, mode="overwrite")
-    
-    print("[green]Insertion complete![/green]")
-    print(f"You can now query the [cyan]'{table_name}'[/cyan] table at [yellow]{uri}[/yellow]")
+    if total_inserted == 0:
+        raise RuntimeError("No vectors were successfully embedded or stored.")
+
+    stats = {
+        "embedder": "pytorch",
+        "vectors_stored": total_inserted,
+        "duration": duration,
+        "tokens_sent": 0,
+        "billable_chars": 0
+    }
+    import sys
+    sys.stdout.write(json.dumps(stats))
 
 if __name__ == "__main__":
     main()

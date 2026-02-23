@@ -1,60 +1,107 @@
 import json
-import os
-import logging
 import lancedb
+import os
+from pathlib import Path
 import rich_click as click
-from rich.traceback import install as trace_install
+import numpy as np
+from google import genai
+from google.genai import types
 
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-
-from sentence_transformers import SentenceTransformer
-
-trace_install()
-
+project_root = Path(__file__).parent.parent.parent
 URI = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
-TABLE_NAME = "glossary"
+GEMINI_TABLE = "gemini_reference_docs"
+PYTORCH_TABLE = "reference_docs"
 
-@click.command()
-@click.argument("query", type=str)
-@click.option(
-    "-n",
-    "--top-n",
-    type=int,
-    default=3,
-    show_default=True,
-    help="Number of chunks to return.",
-)
-def main(query: str, top_n: int):
-    """Searches the LanceDB vector database for the given query silently."""
-    
-    try:
-        db = lancedb.connect(uri=URI)
-        table = db.open_table(TABLE_NAME)
-    except Exception as e:
-        print(json.dumps({"error": f"Error connecting to LanceDB or opening table '{TABLE_NAME}': {e}"}))
-        raise click.Abort()
+def normalize_l2(vector):
+    """Normalizes a single vector to unit length."""
+    v = np.array(vector)
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v.tolist()
+    return (v / norm).tolist()
 
+def get_gemini_embedding(query, model="models/gemini-embedding-001"):
+    client = genai.Client()
+    config_args = {
+        "task_type": "RETRIEVAL_QUERY",
+        "output_dimensionality": 3072
+    }
+        
+    response = client.models.embed_content(
+        model=model,
+        contents=[query],
+        config=types.EmbedContentConfig(**config_args)
+    )
+    # The API returns a list of ContentEmbedding objects. We want the first one's values.
+    vector = response.embeddings[0].values
+    return vector
+
+def get_pytorch_embedding(query):
+    from sentence_transformers import SentenceTransformer
+    # We suppress logging for the silent tool
+    import logging
+    logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
     model = SentenceTransformer("all-mpnet-base-v2")
-    query_vector = model.encode(query).tolist()
+    return model.encode([query])[0].tolist()
+
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
+
+@click.command(context_settings=CONTEXT_SETTINGS, help="""
+    Performs a vector search across the documentation database.
     
-    results = table.search(query_vector).limit(top_n).select(["id", "source_doc", "text", "_distance"]).to_polars()
-        
-    if len(results) == 0:
-        print(json.dumps([]))
+    This tool takes a query string, generates an embedding using the specified backend, 
+    and returns the most relevant documentation chunks in JSON format.
+    """)
+@click.argument("query")
+@click.option("-n", default=5, help="Number of results to return")
+@click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="gemini")
+def main(query, n, embedder):
+    db = lancedb.connect(uri=URI)
+    response = db.list_tables()
+    # Handle both list and ListTablesResponse object
+    available_tables = response.tables if hasattr(response, 'tables') else response
+    
+    # Logic to select the best table based on requested embedder and availability
+    selected_table = None
+    if embedder == "gemini":
+        if GEMINI_TABLE in available_tables:
+            selected_table = GEMINI_TABLE
+        elif PYTORCH_TABLE in available_tables:
+            selected_table = PYTORCH_TABLE
+    else:
+        if PYTORCH_TABLE in available_tables:
+            selected_table = PYTORCH_TABLE
+            
+    if not selected_table:
+        print(json.dumps({"error": f"No suitable table found for {embedder}. Available: {available_tables}"}))
         return
-        
-    output_results = []
-    for i, row in enumerate(results.iter_rows(named=True)):
-        output_results.append({
-            "distance": row.get("_distance", 0.0),
-            "source": row.get("source_doc", "Unknown"),
-            "chunk_id": row.get("id", "Unknown"),
-            "text": row.get("text", "").strip()
+
+    table = db.open_table(selected_table)
+    
+    # Get the correct query vector
+    try:
+        if embedder == "gemini":
+            query_vector = get_gemini_embedding(query)
+        else:
+            query_vector = get_pytorch_embedding(query)
+
+        # Search
+        results = table.search(query_vector).limit(n).to_list()
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        return
+
+    # Format for JSON output
+    output = []
+    for r in results:
+        output.append({
+            "distance": r.get("_distance", 0),
+            "source": r.get("source_doc"),
+            "chunk_id": r.get("id"),
+            "text": r.get("text")
         })
-        
-    print(json.dumps(output_results, indent=2))
+
+    print(json.dumps(output, indent=2))
 
 if __name__ == "__main__":
     main()
