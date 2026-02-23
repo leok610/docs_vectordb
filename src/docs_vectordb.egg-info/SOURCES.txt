@@ -1,0 +1,17 @@
+LICENSE
+README.md
+pyproject.toml
+src/docs_vectordb/assemble_doclist.py
+src/docs_vectordb/chunk_by_indents.py
+src/docs_vectordb/doc_retrieval.py
+src/docs_vectordb/embed_and_store.py
+src/docs_vectordb/gemini_session.py
+src/docs_vectordb/generate_vectordb.py
+src/docs_vectordb/lancedb_test.py
+src/docs_vectordb/torch_test.py
+src/docs_vectordb.egg-info/PKG-INFO
+src/docs_vectordb.egg-info/SOURCES.txt
+src/docs_vectordb.egg-info/dependency_links.txt
+src/docs_vectordb.egg-info/entry_points.txt
+src/docs_vectordb.egg-info/requires.txt
+src/docs_vectordb.egg-info/top_level.txt

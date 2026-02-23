@@ -1,0 +1,33 @@
+[project]
+name = "docs-vectordb"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "google-genai>=1.64.0",
+    "google-generativeai>=0.8.6",
+    "lancedb>=0.29.2",
+    "polars>=1.38.1",
+    "requests>=2.28.1",
+    "rich>=14.3.3",
+    "rich-click>=1.9.7",
+    "sentence-transformers>=5.2.3",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docs_vectordb"]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu130"
+
+[tool.hatch.build.targets.editable]
+path = ["src"]
+
+[project.scripts]
+chunk-indents = "docs_vectordb.chunk_by_indents:main"
+doc-retrieval = "docs_vectordb.doc_retrieval:main"
+embed-and-store = "docs_vectordb.embed_and_store:main"
+generate-vectordb = "docs_vectordb.generate_vectordb:main"

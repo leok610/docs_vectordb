@@ -1,0 +1,20 @@
+Metadata-Version: 2.1
+Name: docs-vectordb
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: google-genai>=1.64.0
+Requires-Dist: google-generativeai>=0.8.6
+Requires-Dist: lancedb>=0.29.2
+Requires-Dist: polars>=1.38.1
+Requires-Dist: requests>=2.28.1
+Requires-Dist: rich>=14.3.3
+Requires-Dist: rich-click>=1.9.7
+Requires-Dist: sentence-transformers>=5.2.3
+Requires-Dist: torch>=2.10.0
+Requires-Dist: torchvision>=0.25.0
+
+# docs_vectordb
+Python SDK script for vectorizing plain text programming documentation in LanceDB.

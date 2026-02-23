@@ -1,0 +1,5 @@
+[console_scripts]
+chunk-indents = docs_vectordb.chunk_by_indents:main
+doc-retrieval = docs_vectordb.doc_retrieval:main
+embed-and-store = docs_vectordb.embed_and_store:main
+generate-vectordb = docs_vectordb.generate_vectordb:main
