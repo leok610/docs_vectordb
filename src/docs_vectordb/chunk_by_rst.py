@@ -5,7 +5,7 @@ from pathlib import Path
 import rich_click as click
 from rich.console import Console
 from rich.traceback import install as trace_install
-from chunking_utils import (
+from .chunking_utils import (
     split_long_unit, 
     write_chunks_to_json, 
     process_files_async, 

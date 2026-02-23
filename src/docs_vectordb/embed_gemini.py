@@ -13,11 +13,8 @@ from google import genai
 from google.genai import types
 import logging
 
-# We use a try-except to support both relative and absolute imports
-try:
-    from .chunking_utils import get_timestamp, setup_shared_logging
-except (ImportError, ValueError):
-    from chunking_utils import get_timestamp, setup_shared_logging
+# Relative import from the same package
+from .chunking_utils import get_timestamp, setup_shared_logging
 
 trace_install()
 

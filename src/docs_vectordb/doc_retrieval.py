@@ -37,12 +37,20 @@ def get_gemini_embedding(query, model="models/gemini-embedding-001"):
     return vector
 
 def get_pytorch_embedding(query):
-    from sentence_transformers import SentenceTransformer
-    # We suppress logging for the silent tool
-    import logging
-    logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-    model = SentenceTransformer("all-mpnet-base-v2")
-    return model.encode([query])[0].tolist()
+    import requests
+    try:
+        response = requests.post(
+            "http://127.0.0.1:5000/encode",
+            json={"queries": [query]},
+            timeout=5
+        )
+        response.raise_for_status()
+        return response.json()["embeddings"][0]
+    except Exception as e:
+        # Fallback to local loading if server is down, but warn
+        print(json.dumps({"warning": f"Embedding server connection failed: {e}." }))
+        print("Start embedding server with 'service-wrapper' command and try again.")
+        exit
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 
@@ -54,7 +62,7 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     """)
 @click.argument("query")
 @click.option("-n", default=5, help="Number of results to return")
-@click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="gemini")
+@click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="pytorch")
 def main(query, n, embedder):
     db = lancedb.connect(uri=URI)
     response = db.list_tables()
