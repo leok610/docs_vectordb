@@ -102,5 +102,52 @@ class TestGenerateVectorDB(unittest.TestCase):
             num_sub_vectors=32
         )
 
+    @patch("docs_vectordb.generate_vectordb.run_script")
+    @patch("docs_vectordb.generate_vectordb.lancedb.connect")
+    @patch("docs_vectordb.generate_vectordb.shutil.rmtree")
+    @patch("docs_vectordb.generate_vectordb.Path.mkdir")
+    @patch("docs_vectordb.generate_vectordb.Path.open", new_callable=mock_open)
+    @patch("docs_vectordb.generate_vectordb.subprocess.Popen")
+    @patch("docs_vectordb.generate_vectordb.requests.get")
+    @patch("docs_vectordb.generate_vectordb.requests.post")
+    def test_worker_single_startup_and_primer(
+        self, mock_post, mock_get, mock_popen, mock_path_open, mock_mkdir, mock_rmtree, mock_lancedb, mock_run_script
+    ):
+        from docs_vectordb.generate_vectordb import main
+        from click.testing import CliRunner
+        
+        # Mock responses
+        mock_run_script.side_effect = [
+            json.dumps(["file1.rst"]), # assemble_doclist
+            "", # chunk_by_rst.py
+            json.dumps({"vectors_stored": 10}) # embed_pytorch.py
+        ]
+        
+        mock_db = MagicMock()
+        mock_lancedb.return_value = mock_db
+        mock_db.list_tables.return_value = ["reference_docs"]
+        
+        mock_table = MagicMock()
+        mock_db.open_table.return_value = mock_table
+        
+        mock_popen.return_value = MagicMock()
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_post.return_value = MagicMock(status_code=200)
+        
+        runner = CliRunner()
+        result = runner.invoke(main, ["--embedder", "pytorch"])
+        
+        self.assertEqual(result.exit_code, 0)
+        
+        # Should have called post once for the primer on port 5000
+        self.assertEqual(mock_post.call_count, 1)
+        
+        # It should pass --port 5000 to embed_pytorch.py
+        mock_run_script_calls = mock_run_script.call_args_list
+        embed_call = mock_run_script_calls[-1]
+        args = embed_call[0]
+        self.assertIn("--port", args)
+        self.assertIn("5000", args)
+
 if __name__ == "__main__":
     unittest.main()

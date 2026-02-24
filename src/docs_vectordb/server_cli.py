@@ -68,11 +68,15 @@ def main(stop):
     console.set_window_title("Pytorch Server 🚀")
     start_time = time.time()
     
+    # Suppress background logging that interferes with the rich Live dashboard
+    import logging
+    logging.getLogger("waitress").setLevel(logging.ERROR)
+    logging.getLogger("embedding-server").setLevel(logging.ERROR)
+    
     try:
-        with console.screen():
-            with Live(console=console, refresh_per_second=1) as live:
-                while True:
-                    uptime_seconds = int(time.time() - start_time)
+        with Live(console=console, refresh_per_second=1, screen=True) as live:
+            while True:
+                uptime_seconds = int(time.time() - start_time)
                     m, s = divmod(uptime_seconds, 60)
                     h, m = divmod(m, 60)
                     uptime_str = f"{h:02d}:{m:02d}:{s:02d}"

@@ -133,39 +133,28 @@ handed off to a background process pool. The main thread's async event loop
 simply manages the IOUs ("Futures") for these tasks, ensuring all CPU cores are
 utilized simultaneously to crunch the text without blocking the orchestrator.
 
-### 2. Distributed Local Embedding
+### 2. GPU-Optimized Local Embedding
 
 Generating local PyTorch embeddings (`embed_pytorch.py`) is the most
-computationally expensive step. Instead of loading the `SentenceTransformer`
-model directly into the main embedding script, the orchestrator acts as a local
-load balancer.
+computationally expensive step. Instead of spawning multiple workers (which duplicates the CUDA context tax and model weights in VRAM), the orchestrator uses a single-worker massive-batching strategy.
 
 ```text
 [Orchestrator: generate_vectordb.py]
    |
-   |-- Spawns independent Flask servers
+   |-- Spawns a single massive-batch Flask server
    v
 [Worker 5000] (Waitress/Flask + MPNet Model)
-[Worker 5001] (Waitress/Flask + MPNet Model)
-[Worker 5002] (Waitress/Flask + MPNet Model)
    ^
-   |-- ThreadPoolExecutor routes HTTP POST batches
+   |-- Sends massive sequential HTTP POST batches
    |
-[embed_pytorch.py] (Reads JSON chunks)
+[embed_pytorch.py] (Reads all JSON chunks into flat list)
 
 ```
 
 1. **Worker Spawning:** `generate_vectordb.py` uses `subprocess` to spin up
-   multiple instances of `embedding_server.py` on local ports. Each server is
-an isolated Waitress/Flask app running its own instance of the model in a
-separate memory space.
-2. **Batch Routing:** `embed_pytorch.py` groups the text chunks into safe batch
-   sizes. It then uses a standard `ThreadPoolExecutor` to fire these batches
-off to the local servers via HTTP POST requests.
-3. **Stateless Processing:** Because making HTTP requests is I/O-bound, the
-   thread pool works perfectly here. The actual heavy matrix multiplication
-happens entirely outside the main script's GIL inside the separate worker
-processes.
+   a single instance of `embedding_server.py` on a local port. This reserves maximum VRAM (e.g., ~11 GB out of 12 GB) exclusively for processing data rather than overhead.
+2. **Massive Batch Routing:** `embed_pytorch.py` flattens chunks across all documents into a massive global list. It batches these chunks (e.g., 2048 at a time) and sends them to the server sequentially, ensuring the GPU's CUDA cores are fully fed without crashing.
+3. **Stateless Processing:** The single Flask server handles the requests statelessly. Because the entire pipeline sends massive batches sequentially, the GPU operates at peak efficiency.
 
 ## Installation
 
@@ -217,10 +206,12 @@ assistant.
 to continue a previous troubleshooting session.
 
 
-* **`service-wrapper`**: A standalone utility to spin up a local PyTorch
+* **`pytorch-server`**: A standalone utility to spin up a local PyTorch
 Waitress/Flask embedding server independently. When `doc-retrieval` needs to
 embed a user's terminal query, loading the PyTorch model into memory from
 scratch has significant cold-start latency. By keeping a local
 server running in the background via `service-wrapper`, the CLI tools can
-instantly POST the query to the active model, drastically speeding up the
-response time for `doc-search` and `doc-search-conversation`.
+instantly POST the query to the active model, speeding up the
+response time for `doc-search` and `doc-search-conversation`. Passing the
+switch `--external-server` to the `generate-vectordb.py` when using Pytorch
+will also utilize this server.

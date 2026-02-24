@@ -115,7 +115,7 @@ async def embed_and_store_gemini(
     client = genai.Client()
     db = lancedb.connect(uri=URI)
     # Use stderr for progress UI
-    console = Console(stderr=True, force_terminal=True)
+    console = Console(stderr=True, force_terminal=True, force_interactive=True, legacy_windows=False)
     
     # Pre-fetch existing source documents to allow resuming
     existing_sources = set()

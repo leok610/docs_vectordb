@@ -4,6 +4,7 @@ import lancedb
 import subprocess
 import sys
 import time
+import requests
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -42,8 +43,8 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     """)
 @click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="gemini", help="Backend to use for embeddings.")
 @click.option("--rebuild", is_flag=True, help="Drop existing table and rebuild from scratch.")
-@click.option("--workers", default=1, type=int, help="Number of PyTorch server workers to spawn.")
-def main(embedder, rebuild, workers):
+@click.option("--external-server", is_flag=True, help="Do not spawn a local PyTorch server; assume an external one is already running.")
+def main(embedder, rebuild, external_server):
     start_run = time.time()
     logs_dir = project_root / "logs"
     logs_dir.mkdir(exist_ok=True)
@@ -60,7 +61,7 @@ def main(embedder, rebuild, workers):
     if rebuild:
         console.print("[bold red]REBUILD MODE: Existing data will be overwritten.[/bold red]")
     
-    log_master(f"Starting run with embedder: {embedder} (Rebuild: {rebuild}, Workers: {workers})")
+    log_master(f"Starting run with embedder: {embedder} (Rebuild: {rebuild}, External Server: {external_server})")
     
     # 0. Clean up previous runs
     chunks_dir = project_root / "chunks"
@@ -162,36 +163,51 @@ def main(embedder, rebuild, workers):
 
         extra_args = ["--force"] if rebuild else []
         
-        if embedder == "pytorch" and workers > 0:
-            import requests
-            base_port = 5000
-            ports = [base_port + i for i in range(workers)]
+        if embedder == "pytorch" and not external_server:
+            port = 5000
             
-            with console.status(f"[cyan]Spawning {workers} PyTorch workers...[/cyan]"):
-                for port in ports:
-                    p = subprocess.Popen(
-                        [sys.executable, str(src_dir / "embedding_server.py"), "--port", str(port)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    spawned_processes.append(p)
-                    log_master(f"Spawned server on port {port} (PID: {p.pid})")
+            with console.status(f"[cyan]Spawning single PyTorch worker on port {port} (Max VRAM efficiency)...[/cyan]") as status:
+                p = subprocess.Popen(
+                    [sys.executable, str(src_dir / "embedding_server.py"), "--port", str(port)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                spawned_processes.append(p)
+                log_master(f"Spawned single server on port {port} (PID: {p.pid})")
                 
                 # Poll health
-                for port in ports:
-                    healthy = False
-                    for _ in range(30): # 30 second timeout
-                        try:
-                            res = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
-                            if res.status_code == 200:
-                                healthy = True
-                                break
-                        except:
-                            time.sleep(1)
-                    if not healthy:
-                        raise RuntimeError(f"Server on port {port} failed to start in time.")
+                status.update(f"[cyan]Waiting for worker on port {port} to be healthy...[/cyan]")
+                healthy = False
+                for _ in range(30): # 30 second timeout
+                    try:
+                        res = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+                        if res.status_code == 200:
+                            healthy = True
+                            break
+                    except:
+                        time.sleep(1)
+                        
+                if not healthy:
+                    log_master(f"Worker on port {port} failed to start.")
+                    p.terminate()
+                    spawned_processes.remove(p)
+                    raise RuntimeError("Failed to spawn single PyTorch worker.")
+                    
+                # Primer request to load model
+                status.update(f"[cyan]Priming worker on port {port} to load model...[/cyan]")
+                try:
+                    res = requests.post(f"http://127.0.0.1:{port}/encode", json={"queries": ["primer"]}, timeout=60)
+                    if res.status_code == 200:
+                        log_master(f"Worker on port {port} primed successfully.")
+                    else:
+                        raise RuntimeError(f"Primer returned {res.status_code}")
+                except Exception as e:
+                    log_master(f"Worker on port {port} failed primer: {e}.")
+                    p.terminate()
+                    spawned_processes.remove(p)
+                    raise RuntimeError(f"Failed to prime single PyTorch worker: {e}")
             
-            extra_args.extend(["--ports", ",".join(map(str, ports))])
+            extra_args.extend(["--port", str(port)])
 
         if embedder == "gemini":
             raw_stats = run_script("embed_gemini.py", str(list_path), *extra_args)
@@ -268,6 +284,10 @@ def main(embedder, rebuild, workers):
     summary.add_row("Total Files", str(len(target_files)))
     summary.add_row("Total Chunks", str(len(chunk_files)))
     summary.add_row("Vectors Stored", str(stats.get("vectors_stored", 0)))
+    if "avg_batch_size" in stats:
+        summary.add_row("Avg Batch Size", str(stats.get("avg_batch_size")))
+    if "max_batch_size" in stats:
+        summary.add_row("Max Batch Size", str(stats.get("max_batch_size")))
     summary.add_row("Phase: Assembly", f"{t_assemble:.2f}s")
     summary.add_row("Phase: Chunking", f"{t_chunk:.2f}s")
     summary.add_row("Phase: Embedding Only", f"{stats.get('embedding_time', 0):.2f}s")

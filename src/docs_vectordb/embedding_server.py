@@ -30,8 +30,12 @@ def encode():
         return jsonify({"error": "Missing 'queries' in request body"}), 400
     
     queries = data['queries']
+    batch_size = len(queries)
+    if queries and queries[0] != "primer":
+        logger.info(f"Received batch of {batch_size} queries.")
+    
     model = get_model()
-    embeddings = model.encode(queries).tolist()
+    embeddings = model.encode(queries, show_progress_bar=False).tolist()
     return jsonify({"embeddings": embeddings})
 
 @app.route('/health', methods=['GET'])
@@ -41,12 +45,8 @@ def health():
 @click.command()
 @click.option("--port", default=5000, type=int, help="Port to run the server on.")
 def main(port):
-    # Standard Flask dev server for manual testing
-    # Windows Service will call serve() directly
-    logger.info(f"Starting embedding server on port {port}...")
-    # Use threads=1 to ensure each process handles only one request at a time,
-    # preventing internal resource contention. We scale via multiple processes instead.
-    serve(app, host="127.0.0.1", port=port, threads=1)
+    logger.info(f"Starting single embedding server on port {port} for max batching efficiency...")
+    serve(app, host="127.0.0.1", port=port, threads=4)
 
 if __name__ == "__main__":
     main()

@@ -5,11 +5,8 @@ import lancedb
 import time
 import sys
 import requests
-import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Iterator, cast, Union, Tuple
-from concurrent.futures import ThreadPoolExecutor, Future
-from itertools import cycle
 import rich_click as click
 from rich.console import Console
 from rich.traceback import install as trace_install
@@ -17,6 +14,28 @@ from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, S
 from rich.live import Live
 from rich.console import Group
 from rich.text import Text
+from rich.theme import Theme
+from rich.panel import Panel
+
+custom_theme = Theme({
+    "markdown": "color(151)",
+    "markdown.code": "color(33)",
+    "markdown.emph": "italic color(179)",
+    "markdown.strong": "color(35)",
+    "markdown.header": "color(179)",
+    "markdown.h1": "bold color(35)",
+    "markdown.h2": "color(179)",
+    "markdown.h3": "color(179)",
+    "markdown.link": "color(179)",
+    "status.cyan": "color(39)",
+    "status.magenta": "color(72)",
+    "dim": "color(103)",
+    "info": "color(103)",
+    "warning": "color(179)",
+    "error": "bold color(131)",
+    "header": "color(151)",
+    "query": "bold color(103)"
+})
 from docs_vectordb.chunking_utils import get_timestamp, setup_shared_logging
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -38,11 +57,10 @@ def print_log(message: str):
 URI = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
 TABLE_NAME = "reference_docs"
 
-def fetch_embeddings(url_pool_iterator: Iterator[str], chunks_batch: List[str], max_retries: int = 3) -> Tuple[Optional[List[List[float]]], float]:
-    """Helper to call a server from the pool and return results with timing and retries."""
+def fetch_embeddings(url: str, chunks_batch: List[str], max_retries: int = 3) -> Tuple[Optional[List[List[float]]], float]:
+    """Helper to call the single server and return results with timing and retries."""
     last_error = None
     for attempt in range(max_retries):
-        url = next(url_pool_iterator)
         t0 = time.time()
         try:
             # Increased timeout to 300s to handle heavy load/large chunks
@@ -61,9 +79,9 @@ def embed_and_store_pytorch(
     file_paths: List[Path], 
     force: bool, 
     batch_size: int, 
-    ports: str
+    port: int
 ) -> Dict[str, Any]:
-    """Core pipeline for PyTorch embedding and storage."""
+    """Core pipeline for PyTorch embedding and storage using single worker with massive batching."""
     db = lancedb.connect(uri=URI)
     
     # Pre-fetch existing source documents to allow resuming
@@ -80,38 +98,34 @@ def embed_and_store_pytorch(
 
     table_exists = TABLE_NAME in db.list_tables()
     
-    # Setup Server Pool
-    port_list = [p.strip() for p in ports.split(",")]
-    server_urls = [f"http://127.0.0.1:{p}/encode" for p in port_list]
+    # Setup Server
+    server_url = f"http://127.0.0.1:{port}/encode"
+    health_url = server_url.replace("/encode", "/health")
     
-    # Verify at least one server is up, or fallback
-    active_urls = []
-    for url in server_urls:
-        health_url = url.replace("/encode", "/health")
-        try:
-            requests.get(health_url, timeout=2).raise_for_status()
-            active_urls.append(url)
-        except:
-            print_log(f"Server at {url} is unreachable.")
-    
-    use_pool = len(active_urls) > 0
-    url_pool_iter = cycle(active_urls) if use_pool else None
+    server_active = False
+    try:
+        requests.get(health_url, timeout=2).raise_for_status()
+        server_active = True
+        print_log(f"Connected to active server at {server_url}.")
+    except:
+        print_log(f"Server at {server_url} is unreachable.")
     
     model = None
-    if not use_pool:
-        print_log("No active servers found. Falling back to local SentenceTransformer.")
+    if not server_active:
+        print_log("No active server found. Falling back to local SentenceTransformer.")
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-mpnet-base-v2")
-    else:
-        print_log(f"Connected to {len(active_urls)} active servers.")
 
     total_inserted = 0
     start_time = time.time()
     embedding_time = 0.0
     storage_time = 0.0
     
-    console = Console(stderr=True, force_terminal=True)
-    work_items: List[Dict[str, Any]] = []
+    console = Console(theme=custom_theme, stderr=True, force_terminal=True, force_interactive=True, legacy_windows=False)
+    
+    # Flatten all chunks and track their metadata
+    global_chunks: List[str] = []
+    global_metadata: List[Dict[str, Any]] = []
     total_chunks = 0
     
     with console.status("[cyan]Scanning documentation files...[/cyan]"):
@@ -134,11 +148,13 @@ def embed_and_store_pytorch(
                 program = chunk_data.get("program")
 
             if chunks and (force or source_doc not in existing_sources):
-                work_items.append({
-                    "chunks": chunks,
-                    "source_doc": source_doc,
-                    "program": program
-                })
+                for i, chunk in enumerate(chunks):
+                    global_chunks.append(chunk)
+                    global_metadata.append({
+                        "source_doc": source_doc,
+                        "program": program,
+                        "index": i
+                    })
                 total_chunks += len(chunks)
 
     if total_chunks == 0:
@@ -147,147 +163,117 @@ def embed_and_store_pytorch(
     processed_chunks = 0
     pending_data: List[Dict[str, Any]] = []
     
-    status_text = Text("Initializing...", style="#00afff") 
+    status_text = Text("Initializing...", style="status.cyan") 
     requests_completed = 0
     total_latency = 0.0
-    telemetry_text = Text("Workers: 0 | RPS: 0.0 | Latency: 0ms", style="#d7af5f")
+    telemetry_text = Text("Batch: 0 | RPS: 0.0 | Latency: 0ms", style="status.magenta")
     
     progress = Progress(
-        SpinnerColumn(style="#d7af5f"),
-        TextColumn("[#afd7af]Vectorizing"),
-        BarColumn(bar_width=None, complete_style="#00875f", finished_style="#afd7af"),
+        SpinnerColumn(style="warning"),
+        TextColumn("[header]Vectorizing"),
+        BarColumn(bar_width=None, complete_style="markdown.strong", finished_style="markdown.header"),
         TextColumn("[dim]{task.completed}/{task.total}"),
-        TaskProgressColumn(style="#00afff"),
+        TaskProgressColumn(style="status.cyan"),
         TimeRemainingColumn(),
         console=console
     )
     ui_group = Group(status_text, telemetry_text, progress)
-    MAX_CHUNKS_PER_REQ = 256
+    panel = Panel(ui_group, title="[bold color(39)]PyTorch Embedding Pipeline[/bold color(39)]", border_style="color(103)")
+    
+    # Massive batching to maximize single-worker VRAM (e.g., 90% utilization)
+    MAX_CHUNKS_PER_REQ = 2048
+    
+    max_batch_size = 0
+    total_batch_size = 0
+    batch_count = 0
+    current_batch_size = 0
 
-    with Live(ui_group, console=console, refresh_per_second=4, vertical_overflow="crop"):
+    with Live(panel, console=console, refresh_per_second=4, screen=True):
         task_id = progress.add_task("", total=total_chunks)
-        num_threads = len(active_urls) if use_pool else 1
-        
-        # Sliding Window / Throttle logic
-        MAX_IN_FLIGHT = num_threads * 2 
-        in_flight_futures: Dict[Future, Dict[str, Any]] = {}
-        
-        # Prepare all batches
-        all_batches = []
-        for item in work_items:
-            s_doc = cast(str, item["source_doc"])
-            prog = cast(Optional[str], item["program"])
-            d_chunks = cast(List[str], item["chunks"])
-            chunk_batches = [d_chunks[i:i + MAX_CHUNKS_PER_REQ] for i in range(0, len(d_chunks), MAX_CHUNKS_PER_REQ)]
-            for cb in chunk_batches:
-                all_batches.append({"source_doc": s_doc, "program": prog, "chunks": cb})
-
-        batch_idx = 0
-        doc_buffers: Dict[str, List[List[float]]] = {}
-        doc_completion: Dict[str, int] = {}
         start_telemetry_time = time.time()
-
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            while batch_idx < len(all_batches) or in_flight_futures:
-                # 1. Fill the window
-                while batch_idx < len(all_batches) and len(in_flight_futures) < MAX_IN_FLIGHT:
-                    b = all_batches[batch_idx]
-                    if use_pool and url_pool_iter:
-                        f_net = executor.submit(fetch_embeddings, url_pool_iter, cast(List[str], b["chunks"]))
-                        in_flight_futures[f_net] = b
-                    elif model:
-                        t0 = time.time()
-                        # encode handles a list of strings
-                        emb = model.encode(cast(List[str], b["chunks"]))
-                        f_sync: Future = Future()
-                        f_sync.set_result((emb.tolist(), time.time() - t0))
-                        in_flight_futures[f_sync] = b
-                    batch_idx += 1
-
-                # 2. Collect finished results
-                done_futures = [f for f in in_flight_futures if f.done()]
-                for fut in done_futures:
-                    meta = in_flight_futures.pop(fut)
+        
+        for batch_start in range(0, len(global_chunks), MAX_CHUNKS_PER_REQ):
+            batch_end = min(batch_start + MAX_CHUNKS_PER_REQ, len(global_chunks))
+            batch_texts = global_chunks[batch_start:batch_end]
+            batch_meta = global_metadata[batch_start:batch_end]
+            
+            current_batch_size = len(batch_texts)
+            max_batch_size = max(max_batch_size, current_batch_size)
+            total_batch_size += current_batch_size
+            batch_count += 1
+            
+            status_text.plain = f"Vectorizing batch of {current_batch_size} chunks..."
+            
+            embs = None
+            t_spent = 0.0
+            
+            if server_active:
+                embs, t_spent = fetch_embeddings(server_url, batch_texts)
+            elif model:
+                t0 = time.time()
+                emb_res = model.encode(batch_texts, show_progress_bar=False)
+                t_spent = time.time() - t0
+                embs = emb_res.tolist()
+            
+            if embs:
+                requests_completed += 1
+                total_latency += t_spent
+                embedding_time += t_spent
+                
+                # Reconstruct and queue for storage
+                for i, vec in enumerate(embs):
+                    meta = batch_meta[i]
                     s_doc = meta["source_doc"]
                     prog = meta["program"]
-                    b_chunks = cast(List[str], meta["chunks"])
+                    idx = meta["index"]
+                    txt = batch_texts[i]
                     
-                    try:
-                        embs, t_spent = fut.result()
-                        if embs:
-                            if s_doc not in doc_buffers: doc_buffers[s_doc] = []
-                            doc_buffers[s_doc].extend(embs)
-                            doc_completion[s_doc] = doc_completion.get(s_doc, 0) + len(b_chunks)
-                            
-                            requests_completed += 1
-                            total_latency += t_spent
-                            embedding_time += t_spent
-                            
-                            # Find expected chunk count for this doc
-                            expected = 0
-                            for item in work_items:
-                                if item["source_doc"] == s_doc:
-                                    expected = len(item["chunks"])
-                                    break
-                            
-                            if doc_completion[s_doc] >= expected:
-                                status_text.plain = f"Vectorized: {s_doc}"
-                                current_embs = doc_buffers.pop(s_doc)
-                                original_chunks: List[str] = []
-                                for item in work_items:
-                                    if item["source_doc"] == s_doc:
-                                        original_chunks = item["chunks"]
-                                        break
-                                
-                                for i, (txt, vec) in enumerate(zip(original_chunks, current_embs)):
-                                    row = {"id": f"{s_doc}_{i:04d}", "source_doc": s_doc, "text": txt, "vector": vec}
-                                    if prog: row["program"] = prog
-                                    pending_data.append(row)
-                                
-                                processed_chunks += expected
-                                progress.update(task_id, completed=processed_chunks)
-                                del doc_completion[s_doc]
-                        else:
-                            print_log(f"Failure for a batch of {s_doc}")
-                    except Exception as e:
-                        print_log(f"Error: {e}")
+                    row = {"id": f"{s_doc}_{idx:04d}", "source_doc": s_doc, "text": txt, "vector": vec}
+                    if prog: row["program"] = prog
+                    pending_data.append(row)
+                
+                processed_chunks += len(batch_texts)
+                progress.update(task_id, completed=processed_chunks)
+            else:
+                print_log(f"Failure for a batch starting at index {batch_start}")
+                continue
+                
+            # Database Store
+            if len(pending_data) >= batch_size or (batch_end == len(global_chunks) and pending_data):
+                status_text.plain = f"Storing {len(pending_data)} vectors..."
+                t_store0 = time.time()
+                try:
+                    if table_exists:
+                        table = db.open_table(TABLE_NAME)
+                        table.add(pending_data)
+                    else:
+                        db.create_table(TABLE_NAME, data=pending_data)
+                        table_exists = True
+                    total_inserted += len(pending_data)
+                    pending_data = []
+                except Exception as e:
+                    print_log(f"Database error: {e}")
+                    pending_data = []
+                storage_time += (time.time() - t_store0)
 
-                # 3. Database Store (Serial)
-                if len(pending_data) >= batch_size or (batch_idx >= len(all_batches) and not in_flight_futures and pending_data):
-                    status_text.plain = f"Storing {len(pending_data)} vectors..."
-                    t_store0 = time.time()
-                    try:
-                        if table_exists:
-                            table = db.open_table(TABLE_NAME)
-                            table.add(pending_data)
-                        else:
-                            db.create_table(TABLE_NAME, data=pending_data)
-                            table_exists = True
-                        total_inserted += len(pending_data)
-                        pending_data = []
-                    except Exception as e:
-                        print_log(f"Database error: {e}")
-                        pending_data = []
-                    storage_time += (time.time() - t_store0)
-
-                # 4. Telemetry Refresh
-                if time.time() - start_telemetry_time >= 1.0:
-                    runtime = time.time() - start_time
-                    rps = requests_completed / runtime if runtime > 0 else 0
-                    avg_lat = (total_latency / requests_completed * 1000) if requests_completed > 0 else 0
-                    telemetry_text.plain = f"Workers: {len(in_flight_futures)} in-flight | RPS: {rps:.1f} | Latency: {int(avg_lat)}ms"
-                    start_telemetry_time = time.time()
-
-                if not done_futures:
-                    time.sleep(0.05)
+            # Telemetry Refresh
+            if time.time() - start_telemetry_time >= 1.0:
+                runtime = time.time() - start_time
+                rps = requests_completed / runtime if runtime > 0 else 0
+                avg_lat = (total_latency / requests_completed * 1000) if requests_completed > 0 else 0
+                telemetry_text.plain = f"Batch: {batch_count} | Size: {current_batch_size} | RPS: {rps:.1f} | Latency: {int(avg_lat)}ms"
+                start_telemetry_time = time.time()
 
     duration = time.time() - start_time
+    avg_batch_size = total_batch_size / batch_count if batch_count > 0 else 0
     return {
         "embedder": "pytorch",
         "vectors_stored": total_inserted,
         "duration": duration,
         "embedding_time": embedding_time,
-        "storage_time": storage_time
+        "storage_time": storage_time,
+        "max_batch_size": max_batch_size,
+        "avg_batch_size": round(avg_batch_size, 1)
     }
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
@@ -298,9 +284,9 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     """)
 @click.argument("file_paths_json", type=click.Path(path_type=Path, exists=True))
 @click.option("--force", is_flag=True, help="Force rebuild by skipping existing document checks.")
-@click.option("--batch-size", default=1000, help="Number of chunks to batch before storing.")
-@click.option("--ports", default="5000", help="Comma-separated list of ports for embedding servers.")
-def main(file_paths_json: Path, force: bool, batch_size: int, ports: str):
+@click.option("--batch-size", default=1000, help="Number of chunks to batch before storing to DB.")
+@click.option("--port", default=5000, type=int, help="Port of the single embedding server.")
+def main(file_paths_json: Path, force: bool, batch_size: int, port: int):
     print_log(f"=== Starting PyTorch Embedding Run: {get_timestamp()} ===")
     try:
         with file_paths_json.open("r", encoding="utf-8-sig") as f_in:
@@ -314,7 +300,7 @@ def main(file_paths_json: Path, force: bool, batch_size: int, ports: str):
         sys.stdout.write(json.dumps({"embedder": "pytorch", "vectors_stored": 0, "duration": 0, "embedding_time": 0.0, "storage_time": 0.0}) + "\n")
         return
 
-    stats = embed_and_store_pytorch(file_paths, force, batch_size, ports)
+    stats = embed_and_store_pytorch(file_paths, force, batch_size, port)
     sys.stdout.write(json.dumps(stats) + "\n")
     sys.stdout.flush()
 
