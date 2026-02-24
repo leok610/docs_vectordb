@@ -21,7 +21,7 @@ The project is managed by `uv` and provides the following interface commands:
   - `healthcheck.py`: Database verification logic.
   - `chunk_by_*.py`: Specialized chunking logic for different file formats.
   - `embed_gemini.py`: Asynchronous Gemini API integration.
-  - `embed_and_store.py`: Local PyTorch integration.
+  - `embed_pytorch.py`: Local PyTorch integration.
 - `tests/`: Comprehensive test suite.
 - `database/`: Local LanceDB storage.
 - `logs/`: Execution and error logs.

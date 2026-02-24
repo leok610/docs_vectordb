@@ -17,6 +17,8 @@ from waitress import serve
 
 PID_FILE = Path(".pytorch_server.pid")
 
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
+
 def get_memory_usage(pid):
     try:
         output = subprocess.check_output(f'tasklist /FI "PID eq {pid}" /FO CSV /NH', shell=True, text=True)
@@ -28,7 +30,7 @@ def get_memory_usage(pid):
         pass
     return "Unknown"
 
-@click.command()
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--stop", is_flag=True, help="Stop the running Pytorch Server.")
 def main(stop):
     console = Console()

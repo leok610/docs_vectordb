@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import json
-from src.docs_vectordb.doc_retrieval import get_gemini_embedding, normalize_l2
+from docs_vectordb.doc_retrieval import get_gemini_embedding, normalize_l2
 
 class TestDocRetrieval(unittest.TestCase):
     def test_normalize_l2_single(self):
@@ -9,7 +9,7 @@ class TestDocRetrieval(unittest.TestCase):
         normalized = normalize_l2(vector)
         self.assertEqual(normalized, [0.6, 0.8])
 
-    @patch("src.docs_vectordb.doc_retrieval.genai.Client")
+    @patch("docs_vectordb.doc_retrieval.genai.Client")
     def test_get_gemini_embedding(self, mock_genai):
         mock_client = MagicMock()
         mock_genai.return_value = mock_client
@@ -25,11 +25,11 @@ class TestDocRetrieval(unittest.TestCase):
         self.assertEqual(vector, [0.1, 0.2])
         mock_client.models.embed_content.assert_called_once()
 
-    @patch("src.docs_vectordb.doc_retrieval.lancedb.connect")
-    @patch("src.docs_vectordb.doc_retrieval.get_gemini_embedding")
+    @patch("docs_vectordb.doc_retrieval.lancedb.connect")
+    @patch("docs_vectordb.doc_retrieval.get_gemini_embedding")
     @patch("rich_click.command", lambda *args, **kwargs: lambda f: f) # Mock click
     def test_main_logic(self, mock_get_emb, mock_lancedb):
-        from src.docs_vectordb.doc_retrieval import main
+        from docs_vectordb.doc_retrieval import main
         
         mock_get_emb.return_value = [0.1, 0.2]
         mock_db = MagicMock()

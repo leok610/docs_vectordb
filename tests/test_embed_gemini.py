@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import asyncio
 import numpy as np
-from src.docs_vectordb.embed_gemini import RateLimiter, normalize_l2, embed_and_store_gemini
+from docs_vectordb.embed_gemini import RateLimiter, normalize_l2, embed_and_store_gemini
 
 class TestEmbedGemini(unittest.TestCase):
     def test_normalize_l2(self):
@@ -24,9 +24,9 @@ class TestEmbedGemini(unittest.TestCase):
         asyncio.run(limiter.wait_if_needed(60))
         mock_sleep.assert_called_once()
 
-    @patch("src.docs_vectordb.embed_gemini.genai.Client")
-    @patch("src.docs_vectordb.embed_gemini.lancedb.connect")
-    @patch("src.docs_vectordb.embed_gemini.print_log")
+    @patch("docs_vectordb.embed_gemini.genai.Client")
+    @patch("docs_vectordb.embed_gemini.lancedb.connect")
+    @patch("docs_vectordb.embed_gemini.print_log")
     def test_embed_and_store_gemini(self, mock_print, mock_lancedb, mock_genai):
         # Setup mocks
         mock_client = MagicMock()

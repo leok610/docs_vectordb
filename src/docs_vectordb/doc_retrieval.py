@@ -38,19 +38,19 @@ def get_gemini_embedding(query, model="models/gemini-embedding-001"):
 
 def get_pytorch_embedding(query):
     import requests
+    import sys
     try:
         response = requests.post(
             "http://127.0.0.1:5000/encode",
             json={"queries": [query]},
-            timeout=5
+            timeout=2 # Faster timeout for interactive search
         )
         response.raise_for_status()
         return response.json()["embeddings"][0]
     except Exception as e:
-        # Fallback to local loading if server is down, but warn
-        print(json.dumps({"warning": f"Embedding server connection failed: {e}." }))
-        print("Start embedding server with 'service-wrapper' command and try again.")
-        exit
+        # Report as warning in JSON for interpretation, but exit with error
+        print(json.dumps({"warning": f"Embedding server connection failed: {e}. Start server with 'service-wrapper'." }))
+        sys.exit(1)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 

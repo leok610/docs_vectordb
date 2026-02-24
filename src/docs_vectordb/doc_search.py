@@ -49,7 +49,8 @@ custom_theme = Theme({
     "query": "bold color(103)"
 })
 console = Console(theme=custom_theme, width=80)
-console = Console()
+
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 
 # The system prompt derived from the skill definition
 SYSTEM_PROMPT = """You are a technical documentation assistant. 
@@ -76,11 +77,20 @@ def get_context(query, top_n=5, embedder="pytorch"):
         cmd = ["doc-retrieval", query, "-n", str(top_n), "--embedder", embedder]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
+    except subprocess.CalledProcessError as e:
+        try:
+            # Try to parse the JSON error/warning from stdout
+            err_data = json.loads(e.stdout)
+            msg = err_data.get("error") or err_data.get("warning") or e.stderr
+            console.print(f"[bold color(131)]Retrieval Error:[/bold color(131)] {msg}")
+        except:
+            console.print(f"[bold color(131)]Retrieval Failed:[/bold color(131)] {e.stderr or str(e)}")
+        return []
     except Exception as e:
-        console.print(f"[red]Error retrieving context:[/red] {e}")
+        console.print(f"[bold color(131)]System Error:[/bold color(131)] {e}")
         return []
 
-@click.command()
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("query")
 @click.option("-n", "--top-n", default=5, help="Number of context chunks to retrieve.")
 @click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="pytorch", help="Embedding backend to use.")

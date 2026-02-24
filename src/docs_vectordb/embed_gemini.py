@@ -13,15 +13,15 @@ from google import genai
 from google.genai import types
 import logging
 
-# Relative import from the same package
-from .chunking_utils import get_timestamp, setup_shared_logging
+# Absolute import
+from docs_vectordb.chunking_utils import get_timestamp, setup_shared_logging
 
 trace_install()
 
 project_root = Path(__file__).parent.parent.parent
 logs_dir = project_root / "logs"
 logs_dir.mkdir(exist_ok=True)
-embedding_log = logs_dir / "embedding.log"
+embedding_log = logs_dir / "embed_gemini.log"
 setup_shared_logging(embedding_log)
 
 def print_log(message: str):
@@ -231,7 +231,7 @@ def main(file_paths: Sequence[str], model: str, dim: int, tpm: int):
     stats = asyncio.run(embed_and_store_gemini(paths, model, dim, tpm))
     
     import sys
-    sys.stdout.write(json.dumps(stats))
+    sys.stdout.write(json.dumps(stats) + "\n")
 
 if __name__ == "__main__":
     main()

@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import os
 import shutil
-from src.docs_vectordb.chunking_utils import split_long_unit, write_chunks_to_json, load_targets
+from docs_vectordb.chunking_utils import split_long_unit, write_chunks_to_json, load_targets
 
 class TestChunkingUtils(unittest.TestCase):
     def test_split_long_unit_no_split(self):

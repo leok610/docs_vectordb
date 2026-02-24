@@ -69,11 +69,7 @@ def main(embedder):
         response = db.list_tables()
         available_tables = response.tables if hasattr(response, 'tables') else response
         if TABLE_NAME in available_tables:
-            if embedder == "gemini":
-                console.print(f"[cyan]Table '{TABLE_NAME}' exists. Resuming ingestion...[/cyan]")
-            else:
-                db.drop_table(TABLE_NAME)
-                console.print(f"[yellow]Dropped existing table: '{TABLE_NAME}'[/yellow]")
+            console.print(f"[cyan]Table '{TABLE_NAME}' exists. Resuming ingestion...[/cyan]")
     except Exception as e:
         console.print(f"[red]Could not handle table initialization:[/red] {e}")
 
@@ -146,6 +142,8 @@ def main(embedder):
             raw_stats = run_script("embed_pytorch.py", str(list_path))
             
     if not raw_stats:
+        console.print("[red]Phase 3 Failed: Embedding script returned no results.[/red]")
+        console.print("Check logs/embed_pytorch.log or logs/embed_gemini.log for errors.")
         raise RuntimeError("Phase 3 Failed: Embedding script failed to produce stats output.")
 
     t_embed = time.time() - t0
@@ -191,8 +189,18 @@ def main(embedder):
         console.print(f"Raw output: {raw_stats}")
         raise RuntimeError(f"Phase 3 Failed: Could not parse embedding results: {e}")
     
-    if not stats or stats.get("vectors_stored", 0) == 0:
-        raise RuntimeError("Phase 3 Failed: No vectors were stored in the database.")
+    if not stats:
+        raise RuntimeError("Phase 3 Failed: Embedding script failed to produce results.")
+    
+    if stats.get("vectors_stored", 0) == 0:
+        # Check if table already had data
+        db = lancedb.connect(URI)
+        response = db.list_tables()
+        available_tables = response.tables if hasattr(response, 'tables') else response
+        if table_to_index not in available_tables:
+            raise RuntimeError("Phase 3 Failed: No vectors were stored and no existing table was found.")
+        else:
+            console.print("[yellow]No new vectors were added (all files already processed).[/yellow]")
 
     summary = Table(title="Run Summary")
     summary.add_column("Metric", style="cyan")

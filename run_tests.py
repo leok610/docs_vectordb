@@ -14,7 +14,7 @@ def run_command(command, description):
 def main():
     # 1. Static Analysis
     # We ignore some errors that are expected due to missing stubs or environment setup
-    static_passed = run_command("uv run mypy src main.py --ignore-missing-imports", "Static Analysis (mypy)")
+    static_passed = run_command("uv run mypy src --ignore-missing-imports", "Static Analysis (mypy)")
 
     # 2. Unit Tests
     # We use unittest to discover and run tests in the tests folder

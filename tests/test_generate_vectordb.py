@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch, mock_open
 from pathlib import Path
 import json
-from src.docs_vectordb.generate_vectordb import run_script
+from docs_vectordb.generate_vectordb import run_script
 
 class TestGenerateVectorDB(unittest.TestCase):
     @patch("subprocess.run")
@@ -15,7 +15,7 @@ class TestGenerateVectorDB(unittest.TestCase):
         mock_run.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("src.docs_vectordb.generate_vectordb.console.print")
+    @patch("docs_vectordb.generate_vectordb.console.print")
     def test_run_script_failure(self, mock_print, mock_run):
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "error"
@@ -24,13 +24,13 @@ class TestGenerateVectorDB(unittest.TestCase):
         self.assertIsNone(result)
         mock_print.assert_called_once()
 
-    @patch("src.docs_vectordb.generate_vectordb.run_script")
-    @patch("src.docs_vectordb.generate_vectordb.lancedb.connect")
-    @patch("src.docs_vectordb.generate_vectordb.shutil.rmtree")
-    @patch("src.docs_vectordb.generate_vectordb.Path.mkdir")
-    @patch("src.docs_vectordb.generate_vectordb.Path.open", new_callable=mock_open)
+    @patch("docs_vectordb.generate_vectordb.run_script")
+    @patch("docs_vectordb.generate_vectordb.lancedb.connect")
+    @patch("docs_vectordb.generate_vectordb.shutil.rmtree")
+    @patch("docs_vectordb.generate_vectordb.Path.mkdir")
+    @patch("docs_vectordb.generate_vectordb.Path.open", new_callable=mock_open)
     def test_main_flow_gemini(self, mock_path_open, mock_mkdir, mock_rmtree, mock_lancedb, mock_run_script):
-        from src.docs_vectordb.generate_vectordb import main
+        from docs_vectordb.generate_vectordb import main
         from click.testing import CliRunner
         
         # Mock responses
@@ -64,20 +64,20 @@ class TestGenerateVectorDB(unittest.TestCase):
             num_sub_vectors=96
         )
 
-    @patch("src.docs_vectordb.generate_vectordb.run_script")
-    @patch("src.docs_vectordb.generate_vectordb.lancedb.connect")
-    @patch("src.docs_vectordb.generate_vectordb.shutil.rmtree")
-    @patch("src.docs_vectordb.generate_vectordb.Path.mkdir")
-    @patch("src.docs_vectordb.generate_vectordb.Path.open", new_callable=mock_open)
+    @patch("docs_vectordb.generate_vectordb.run_script")
+    @patch("docs_vectordb.generate_vectordb.lancedb.connect")
+    @patch("docs_vectordb.generate_vectordb.shutil.rmtree")
+    @patch("docs_vectordb.generate_vectordb.Path.mkdir")
+    @patch("docs_vectordb.generate_vectordb.Path.open", new_callable=mock_open)
     def test_main_flow_pytorch(self, mock_path_open, mock_mkdir, mock_rmtree, mock_lancedb, mock_run_script):
-        from src.docs_vectordb.generate_vectordb import main
+        from docs_vectordb.generate_vectordb import main
         from click.testing import CliRunner
         
         # Mock responses
         mock_run_script.side_effect = [
             json.dumps(["file1.rst"]), # assemble_doclist
             "", # chunk_by_rst.py
-            json.dumps({"vectors_stored": 10}) # embed_and_store.py
+            json.dumps({"vectors_stored": 10}) # embed_pytorch.py
         ]
         
         mock_db = MagicMock()
@@ -93,8 +93,8 @@ class TestGenerateVectorDB(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_rmtree.assert_called()
         mock_lancedb.assert_called()
-        # For PyTorch, table IS dropped
-        mock_db.drop_table.assert_called_with("reference_docs")
+        # For PyTorch, table is now also NOT dropped by default (Resume mode)
+        mock_db.drop_table.assert_not_called()
         
         # Verify indexing
         mock_db.open_table.assert_called_with("reference_docs")

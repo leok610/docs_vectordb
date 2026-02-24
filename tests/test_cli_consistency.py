@@ -4,17 +4,13 @@ import importlib
 import json
 
 # List of all entry points and main scripts to check
+# Aligned with [project.scripts] in pyproject.toml
 COMMANDS = {
-    "assemble_doclist": "src.docs_vectordb.assemble_doclist",
-    "chunk_by_indents": "src.docs_vectordb.chunk_by_indents",
-    "chunk_by_rst": "src.docs_vectordb.chunk_by_rst",
-    "chunk_by_md": "src.docs_vectordb.chunk_by_md",
-    "chunk_by_txt": "src.docs_vectordb.chunk_by_txt",
-    "doc_retrieval": "src.docs_vectordb.doc_retrieval",
-    "embed_and_store": "src.docs_vectordb.embed_and_store",
-    "embed_gemini": "src.docs_vectordb.embed_gemini",
-    "generate_vectordb": "src.docs_vectordb.generate_vectordb",
-    "healthcheck": "src.docs_vectordb.healthcheck"
+    "database-healthcheck": "docs_vectordb.healthcheck",
+    "doc-retrieval": "docs_vectordb.doc_retrieval",
+    "doc-search": "docs_vectordb.doc_search",
+    "doc-search-conversation": "docs_vectordb.doc_search_conversation",
+    "service-wrapper": "docs_vectordb.server_cli"
 }
 
 class TestCLIConsistency(unittest.TestCase):
@@ -35,7 +31,7 @@ class TestCLIConsistency(unittest.TestCase):
 
     def test_embedder_option_consistency(self):
         """Verify that scripts using an embedder option use the name '--embedder' consistently."""
-        scripts_with_embedder = ["doc_retrieval", "generate_vectordb"]
+        scripts_with_embedder = ["doc-retrieval"]
         
         for name in scripts_with_embedder:
             module = importlib.import_module(COMMANDS[name])

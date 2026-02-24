@@ -59,6 +59,8 @@ console = Console(theme=custom_theme, width=80)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 CHATS_DIR = PROJECT_ROOT / "chats"
 
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
+
 SYSTEM_PROMPT = """You are an expert technical assistant. Your goal is to help the user understand their documentation and navigate the application effectively.
 
 ## Strategy:
@@ -80,9 +82,16 @@ def get_context(query, top_n=5, embedder="gemini"):
         cmd = ["doc-retrieval", query, "-n", str(top_n), "--embedder", embedder]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
-    # TODO: Specify exceptions
-    except Exception as e:
-        return e
+    except subprocess.CalledProcessError as e:
+        try:
+            err_data = json.loads(e.stdout)
+            msg = err_data.get("error") or err_data.get("warning") or e.stderr
+            console.print(f"[warning]Retrieval Error:[/warning] {msg}")
+        except:
+            pass 
+        return []
+    except Exception:
+        return []
 
 
 def save_history(history):
@@ -255,7 +264,7 @@ def run_chat(initial_query=None):
             console.print(f"[red]Error:[/red] {e}")
 
 
-@click.command()
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("query", required=False)
 def main(query):
     """
