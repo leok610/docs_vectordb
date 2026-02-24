@@ -12,16 +12,9 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("embedding-server")
 
-# Lazy load model
-_model = None
-
-def get_model():
-    global _model
-    if _model is None:
-        logger.info("Loading SentenceTransformer model 'all-mpnet-base-v2'...")
-        _model = SentenceTransformer("all-mpnet-base-v2")
-        logger.info("Model loaded successfully.")
-    return _model
+logger.info("Loading SentenceTransformer model 'all-mpnet-base-v2'...")
+model = SentenceTransformer("all-mpnet-base-v2")
+logger.info("Model loaded successfully.")
 
 @app.route('/encode', methods=['POST'])
 def encode():
@@ -33,8 +26,6 @@ def encode():
     batch_size = len(queries)
     if queries and queries[0] != "primer":
         logger.info(f"Received batch of {batch_size} queries.")
-    
-    model = get_model()
     embeddings = model.encode(queries, show_progress_bar=False).tolist()
     return jsonify({"embeddings": embeddings})
 
@@ -45,7 +36,7 @@ def health():
 @click.command()
 @click.option("--port", default=5000, type=int, help="Port to run the server on.")
 def main(port):
-    logger.info(f"Starting single embedding server on port {port} for max batching efficiency...")
+    logger.info(f"Starting embedding server on port {port}")
     serve(app, host="127.0.0.1", port=port, threads=4)
 
 if __name__ == "__main__":

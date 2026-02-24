@@ -77,23 +77,23 @@ def main(stop):
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while True:
                 uptime_seconds = int(time.time() - start_time)
-                    m, s = divmod(uptime_seconds, 60)
-                    h, m = divmod(m, 60)
-                    uptime_str = f"{h:02d}:{m:02d}:{s:02d}"
+                m, s = divmod(uptime_seconds, 60)
+                h, m = divmod(m, 60)
+                uptime_str = f"{h:02d}:{m:02d}:{s:02d}"
                     
-                    mem_usage = get_memory_usage(pid)
+                mem_usage = get_memory_usage(pid)
                     
-                    text = Text()
-                    text.append("Pytorch Embedding Server 🚀\n\n", style="bold cyan")
-                    text.append(f"Port:         5000\n", style="green")
-                    text.append(f"Uptime:       {uptime_str}\n", style="yellow")
-                    text.append(f"Memory Usage: {mem_usage}\n", style="magenta")
-                    text.append(f"PID:          {pid}\n\n", style="dim white")
-                    text.append("Press Ctrl+C to close the server.", style="bold red")
-                    
-                    panel = Panel(text, title="Server Status", border_style="cyan", width=50)
-                    live.update(panel)
-                    time.sleep(1)
+                text = Text()
+                text.append("Pytorch Embedding Server 🚀\n\n", style="bold cyan")
+                text.append(f"Port:         5000\n", style="green")
+                text.append(f"Uptime:       {uptime_str}\n", style="yellow")
+                text.append(f"Memory Usage: {mem_usage}\n", style="magenta")
+                text.append(f"PID:          {pid}\n\n", style="dim white")
+                text.append("Press Ctrl+C to close the server.", style="bold red")
+                
+                panel = Panel(text, title="Server Status", border_style="cyan", width=50)
+                live.update(panel)
+                time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:

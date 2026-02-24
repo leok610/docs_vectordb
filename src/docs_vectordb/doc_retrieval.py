@@ -43,13 +43,13 @@ def get_pytorch_embedding(query):
         response = requests.post(
             "http://127.0.0.1:5000/encode",
             json={"queries": [query]},
-            timeout=2 # Faster timeout for interactive search
+            timeout=5 # Faster timeout for interactive search
         )
         response.raise_for_status()
         return response.json()["embeddings"][0]
     except Exception as e:
         # Report as warning in JSON for interpretation, but exit with error
-        print(json.dumps({"warning": f"Embedding server connection failed: {e}. Start server with 'service-wrapper'." }))
+        print(json.dumps({"warning": f"Embedding server connection failed: {e}. Start server with 'typorch-server'." }))
         sys.exit(1)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
