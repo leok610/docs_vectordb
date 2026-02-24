@@ -110,10 +110,19 @@ cython_debug/
 .vscode/
 
 # Project Specific
-database/
-chunks/
-logs/
+# Include empty folders for structure documentation
+!database/
+database/*
+!database/.gitkeep
+!chunks/
+chunks/*
+!chunks/.gitkeep
+!logs/
+logs/*
+!logs/.gitkeep
 temp_targets/
 test_output/
 test_output_empty/
-chats/
+!chats/
+chats/*
+!chats/.gitkeep
