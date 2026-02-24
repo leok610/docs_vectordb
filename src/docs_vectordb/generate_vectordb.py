@@ -42,7 +42,8 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     """)
 @click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="gemini", help="Backend to use for embeddings.")
 @click.option("--rebuild", is_flag=True, help="Drop existing table and rebuild from scratch.")
-def main(embedder, rebuild):
+@click.option("--workers", default=1, type=int, help="Number of PyTorch server workers to spawn.")
+def main(embedder, rebuild, workers):
     start_run = time.time()
     logs_dir = project_root / "logs"
     logs_dir.mkdir(exist_ok=True)
@@ -59,7 +60,7 @@ def main(embedder, rebuild):
     if rebuild:
         console.print("[bold red]REBUILD MODE: Existing data will be overwritten.[/bold red]")
     
-    log_master(f"Starting run with embedder: {embedder} (Rebuild: {rebuild})")
+    log_master(f"Starting run with embedder: {embedder} (Rebuild: {rebuild}, Workers: {workers})")
     
     # 0. Clean up previous runs
     chunks_dir = project_root / "chunks"
@@ -83,81 +84,130 @@ def main(embedder, rebuild):
     except Exception as e:
         console.print(f"[red]Could not handle table initialization:[/red] {e}")
 
-    # 1. Assemble Document List
-    t0 = time.time()
-    with console.status("[cyan]Assembling doclist...[/cyan]"):
-        doclist_json = run_script("assemble_doclist.py", "rst", "md", "txt")
-        if not doclist_json:
-            raise RuntimeError("Phase 1 Failed: Failed to assemble document list.")
-        target_files = json.loads(doclist_json)
+    # Orchestration Helpers
+    spawned_processes = []
     
-    if not target_files:
-        raise RuntimeError("Phase 1 Failed: No target documents found.")
+    def cleanup_servers():
+        for p in spawned_processes:
+            try:
+                p.terminate()
+                log_master(f"Terminated server process {p.pid}")
+            except:
+                pass
 
-    t_assemble = time.time() - t0
-    console.print(f"[green]Found {len(target_files)} files to process.[/green]")
-    log_master(f"Assembled {len(target_files)} files in {t_assemble:.2f}s")
-    
-    # 2. Chunking
-    t0 = time.time()
-    rst_files, md_files, txt_files, glossary_files = [], [], [], []
-    for f in target_files:
-        p = Path(f)
-        if p.name == "glossary.rst": glossary_files.append(f)
-        elif p.suffix == ".rst": rst_files.append(f)
-        elif p.suffix == ".md": md_files.append(f)
-        elif p.suffix == ".txt": txt_files.append(f)
+    import atexit
+    atexit.register(cleanup_servers)
 
-    temp_targets_dir = project_root / "temp_targets"
-    temp_targets_dir.mkdir(exist_ok=True)
-    
-    target_groups = {
-        "chunk_by_indents.py": ("glossary_targets.json", glossary_files),
-        "chunk_by_rst.py": ("rst_targets.json", rst_files),
-        "chunk_by_md.py": ("md_targets.json", md_files),
-        "chunk_by_txt.py": ("txt_targets.json", txt_files),
-    }
+    try:
+        # 1. Assemble Document List
+        t0 = time.time()
+        with console.status("[cyan]Assembling doclist...[/cyan]"):
+            doclist_json = run_script("assemble_doclist.py", "rst", "md", "txt")
+            if not doclist_json:
+                raise RuntimeError("Phase 1 Failed: Failed to assemble document list.")
+            target_files = json.loads(doclist_json)
+        
+        if not target_files:
+            raise RuntimeError("Phase 1 Failed: No target documents found.")
 
-    for script, (jname, flist) in target_groups.items():
-        if not flist: continue
-        tpath = temp_targets_dir / jname
-        with tpath.open("w", encoding="utf-8-sig") as f: json.dump(flist, f)
-        with console.status(f"[cyan]Chunking {len(flist)} files with {script}...[/cyan]"):
-            chunk_output = run_script(script, str(tpath), "--async-mode")
-            if chunk_output is None:
-                raise RuntimeError(f"Phase 2 Failed: Chunking script {script} failed.")
-    
-    t_chunk = time.time() - t0
-    shutil.rmtree(temp_targets_dir)
-    log_master(f"Chunking completed in {t_chunk:.2f}s")
+        t_assemble = time.time() - t0
+        console.print(f"[green]Found {len(target_files)} files to process.[/green]")
+        log_master(f"Assembled {len(target_files)} files in {t_assemble:.2f}s")
+        
+        # 2. Chunking
+        t0 = time.time()
+        rst_files, md_files, txt_files, glossary_files = [], [], [], []
+        for f in target_files:
+            p = Path(f)
+            if p.name == "glossary.rst": glossary_files.append(f)
+            elif p.suffix == ".rst": rst_files.append(f)
+            elif p.suffix == ".md": md_files.append(f)
+            elif p.suffix == ".txt": txt_files.append(f)
 
-    # 3. Embedding & Storing
-    t0 = time.time()
-    chunk_files = list(chunks_dir.glob("*_chunks.json"))
-    if not chunk_files:
-        raise RuntimeError("Phase 2 Failed: No chunk files were generated.")
+        temp_targets_dir = project_root / "temp_targets"
+        temp_targets_dir.mkdir(exist_ok=True)
+        
+        target_groups = {
+            "chunk_by_indents.py": ("glossary_targets.json", glossary_files),
+            "chunk_by_rst.py": ("rst_targets.json", rst_files),
+            "chunk_by_md.py": ("md_targets.json", md_files),
+            "chunk_by_txt.py": ("txt_targets.json", txt_files),
+        }
 
-    console.print(f"[green]Generated {len(chunk_files)} chunk files.[/green]")
-    
-    # Create a JSON list of chunk files to avoid shell argument length limits
-    list_path = chunks_dir / "all_chunk_files.json"
-    with list_path.open("w", encoding="utf-8-sig") as f:
-        json.dump([str(p) for p in chunk_files], f)
+        for script, (jname, flist) in target_groups.items():
+            if not flist: continue
+            tpath = temp_targets_dir / jname
+            with tpath.open("w", encoding="utf-8-sig") as f: json.dump(flist, f)
+            with console.status(f"[cyan]Chunking {len(flist)} files with {script}...[/cyan]"):
+                chunk_output = run_script(script, str(tpath), "--async-mode")
+                if chunk_output is None:
+                    raise RuntimeError(f"Phase 2 Failed: Chunking script {script} failed.")
+        
+        t_chunk = time.time() - t0
+        shutil.rmtree(temp_targets_dir)
+        log_master(f"Chunking completed in {t_chunk:.2f}s")
 
-    extra_args = ["--force"] if rebuild else []
-    if embedder == "gemini":
-        raw_stats = run_script("embed_gemini.py", str(list_path), *extra_args)
-    else:
-        # PyTorch now also uses the JSON list
-        raw_stats = run_script("embed_pytorch.py", str(list_path), *extra_args)
+        # 3. Embedding & Storing
+        t0 = time.time()
+        chunk_files = list(chunks_dir.glob("*_chunks.json"))
+        if not chunk_files:
+            raise RuntimeError("Phase 2 Failed: No chunk files were generated.")
+
+        console.print(f"[green]Generated {len(chunk_files)} chunk files.[/green]")
+        
+        # Create a JSON list of chunk files to avoid shell argument length limits
+        list_path = chunks_dir / "all_chunk_files.json"
+        with list_path.open("w", encoding="utf-8-sig") as f:
+            json.dump([str(p) for p in chunk_files], f)
+
+        extra_args = ["--force"] if rebuild else []
+        
+        if embedder == "pytorch" and workers > 0:
+            import requests
+            base_port = 5000
+            ports = [base_port + i for i in range(workers)]
             
-    if not raw_stats:
-        console.print("[red]Phase 3 Failed: Embedding script returned no results.[/red]")
-        console.print("Check logs/embed_pytorch.log or logs/embed_gemini.log for errors.")
-        raise RuntimeError("Phase 3 Failed: Embedding script failed to produce stats output.")
+            with console.status(f"[cyan]Spawning {workers} PyTorch workers...[/cyan]"):
+                for port in ports:
+                    p = subprocess.Popen(
+                        [sys.executable, str(src_dir / "embedding_server.py"), "--port", str(port)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    spawned_processes.append(p)
+                    log_master(f"Spawned server on port {port} (PID: {p.pid})")
+                
+                # Poll health
+                for port in ports:
+                    healthy = False
+                    for _ in range(30): # 30 second timeout
+                        try:
+                            res = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+                            if res.status_code == 200:
+                                healthy = True
+                                break
+                        except:
+                            time.sleep(1)
+                    if not healthy:
+                        raise RuntimeError(f"Server on port {port} failed to start in time.")
+            
+            extra_args.extend(["--ports", ",".join(map(str, ports))])
 
-    t_embed = time.time() - t0
-    log_master(f"Embedding completed in {t_embed:.2f}s")
+        if embedder == "gemini":
+            raw_stats = run_script("embed_gemini.py", str(list_path), *extra_args)
+        else:
+            raw_stats = run_script("embed_pytorch.py", str(list_path), *extra_args)
+                
+        if not raw_stats:
+            console.print("[red]Phase 3 Failed: Embedding script returned no results.[/red]")
+            console.print("Check logs/embed_pytorch.log or logs/embed_gemini.log for errors.")
+            raise RuntimeError("Phase 3 Failed: Embedding script failed to produce stats output.")
+
+        t_embed = time.time() - t0
+        log_master(f"Embedding completed in {t_embed:.2f}s")
+
+    finally:
+        cleanup_servers()
 
     # 3.5 Indexing
     t0 = time.time()

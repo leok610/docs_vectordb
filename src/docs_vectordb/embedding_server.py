@@ -4,6 +4,8 @@ from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 from waitress import serve
 
+import rich_click as click
+
 app = Flask(__name__)
 
 # Configure logging
@@ -36,7 +38,15 @@ def encode():
 def health():
     return jsonify({"status": "healthy"}), 200
 
-if __name__ == "__main__":
+@click.command()
+@click.option("--port", default=5000, type=int, help="Port to run the server on.")
+def main(port):
     # Standard Flask dev server for manual testing
     # Windows Service will call serve() directly
-    serve(app, host="127.0.0.1", port=5000)
+    logger.info(f"Starting embedding server on port {port}...")
+    # Use threads=1 to ensure each process handles only one request at a time,
+    # preventing internal resource contention. We scale via multiple processes instead.
+    serve(app, host="127.0.0.1", port=port, threads=1)
+
+if __name__ == "__main__":
+    main()
