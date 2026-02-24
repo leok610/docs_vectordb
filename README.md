@@ -1,82 +1,226 @@
 # Docs VectorDB
 
-A high-performance, scalable pipeline for vectorizing and searching programming documentation using Gemini and local PyTorch models.
+This repository contains a CLI-native vector database system designed to ingest
+local technical reference documentation and make it highly searchable from the
+terminal. The system parses Markdown, RST, and plain text files, generates
+vector embeddings, and stores them in LanceDB for rapid semantic retrieval.
 
-## Overview
+## Backends
 
-Docs VectorDB automates the process of transforming plain-text documentation (RST, Markdown, TXT) into a searchable vector database. It features structural semantic chunking, multi-worker scaling for local models, and stateful conversational search interfaces.
+The system explicitly separates the task of embedding text into vectors from
+the task of generating the final conversational answers. Crucially, the
+embedding process happens twice: first when parsing the files to build the
+database, and again every time a search query is submitted. The search query
+must be vectorized using the exact same backend as the database to accurately
+calculate similarity.
 
-## Key Features
+**Embedding Backends**
+The pipeline supports two distinct models for generating vector embeddings:
 
-- **Scalable Local Inference:** Orchestrates multiple local PyTorch embedding servers in parallel to maximize GPU/CPU utilization.
-- **Structural Chunking:** Specialized parsers for RST, Markdown, and TXT that respect document hierarchy and semantic boundaries.
-- **Dual Backends:** Support for high-dimensional Gemini (3072-dim) and local `all-mpnet-base-v2` (768-dim) vectors.
-- **Stateful Search:** Includes both single-shot AI search and a conversational chat interface with history tracking.
-- **Resilient Pipeline:** Built-in resume logic, schema-mismatch tolerance, and VRAM protection via chunk-level batching.
+* **Local PyTorch:** Uses the `all-mpnet-base-v2` SentenceTransformer model.
+This executes entirely locally and is optimized for speed and zero-cost
+scaling, making it the default for rapid CLI queries.
+* **Gemini API:** Uses Google's remote embedding API to generate
+higher-dimensional vectors. This relies on cloud processing and is subject to
+network latency and API rate limits.
 
-## Quick Start
+**Generative Backend**
+Once the query is embedded and the relevant document chunks are retrieved from
+the local database, the context is passed exclusively to the **Gemini 2.5 Flash
+Lite** model. This model is utilized as the sole generative engine because of
+its extreme speed and strict adherence to system prompts, quickly formatting
+the raw documentation excerpts into concise Markdown answers directly in the
+terminal.
 
-The project is managed by `uv`. Ensure you have Python >= 3.14 installed.
+## Pipeline Architecture
 
-### 1. Generating the Vector Database
-The orchestrator manages the entire lifecycle: assembly, chunking, and embedding.
+The data flow is managed by a central orchestrator script
+(`generate_vectordb.py`) that pushes raw documentation through a multi-phase
+pipeline.
 
-```powershell
-# Default: High-speed local rebuild with 4 parallel worker servers
-uv run python src/docs_vectordb/generate_vectordb.py --embedder pytorch --workers 4 --rebuild
+```text
+[Raw Docs] 
+   |
+   v
+(Chunking Scripts)  --> Split text by headers, indents, or paragraphs
+   |
+   v
+[JSON Chunks]       --> Temp storage in /chunks
+   |
+   v
+(Embedding Scripts) --> Pass text to PyTorch or Gemini API to get vectors
+   |
+   v
+[LanceDB]           --> Persistent vector database
+   |
+   v
+(doc_search)        --> Terminal queries the DB, sends context to AI
+   |
+   v
+[Terminal UI]       --> Formatted Markdown answers and CLI ripgrep fallbacks
 
-# Gemini: Cloud-based indexing with resume support (skips existing files)
-uv run python src/docs_vectordb/generate_vectordb.py --embedder gemini
 ```
 
-### 2. AI-Powered Search
-Use the single-shot search tool for quick technical answers:
-```powershell
-# Formal AI search across all documentation
-uv run doc-search "How do I use asyncio queues?"
+The assembly phase scans the target directories for supported file types and
+passes them to the chunking scripts. These chunkers parse the text based on its
+format (such as separating RST by Sphinx headers or Markdown by hash marks) to
+create overlapping semantic units. These units are temporarily saved as JSON
+files in the `chunks` directory. The embedding phase then reads these JSON
+files and sends the text to either a local PyTorch server or the remote Gemini
+API to generate vector arrays. Finally, these arrays are committed to LanceDB.
+
+Once the database is built, the terminal UI scripts query the database using
+the same embedding logic and pass the retrieved context to an LLM to generate
+formatted, actionable answers directly in the console.
+
+## Directory Structure
+
+The architecture isolates the persistent database, the execution logic, and the
+temporary build files into dedicated directories.
+
+* **`src/docs_vectordb/`**: This directory houses the core execution logic. It
+is functionally divided into chunking processors, embedding generators, and the
+terminal interaction tools.
+* **`tests/`**: The pytest suite ensures that the chunking boundary logic
+remains accurate and that the CLI output formatting stays consistent as the
+tools are updated.
+* **`database/`**: The persistent storage location where LanceDB maintains the
+binary vector tables and search indices.
+* **`logs/`**: Text logs generated during the heavy background processing steps
+are written here to keep the main terminal output clean during database
+generation.
+* **`chats/`**: Serialized JSON dumps of previous interactive sessions from the
+conversation script are saved here, allowing specific problem-solving contexts
+to be reloaded in future terminal sessions.
+* **`chunks/`**: A temporary directory generated during the database build
+process to hold the intermediate JSON representations of the parsed documents
+before they are embedded.
+
+## Concurrency in the Pipeline
+
+Because text parsing and vector math are heavily CPU-bound, relying on
+standard, single-threaded Python would be a massive bottleneck due to the
+Global Interpreter Lock (GIL). The pipeline bypasses this by implementing two
+different concurrency strategies for chunking and embedding.
+
+### 1. Async Document Chunking
+
+When the orchestrator calls scripts like `chunk_by_rst.py`, it passes an
+`--async-mode` flag. Instead of parsing hundreds of files sequentially, the
+chunking utilities use a hybrid approach.
+
+```text
+[Async Event Loop] (Main Thread)
+   |
+   |-- loop.run_in_executor() creates a "Future" (an IOU) for each file
+   |
+   +---> [Process Pool Executor] (Bypasses the GIL)
+             |
+             |---> Worker 1 (CPU Core) -> process_single_file(doc_A)
+             |---> Worker 2 (CPU Core) -> process_single_file(doc_B)
+             |---> Worker 3 (CPU Core) -> process_single_file(doc_C)
+             |
+   | <-------+ (Workers finish and resolve their Futures)
+   |
+   |-- await asyncio.gather(*tasks) pauses the main thread until ALL are done
+   v
+[Return Total Chunks]
+
 ```
 
-### 3. Conversational Interface
-Engage in a stateful dialogue with your documentation:
-```powershell
-# Start the interactive chat tool
-uv run doc-chat
-```
-**Chat Commands:**
-- `/model [1-4]`: Switch between Gemini 1.5 Flash, 1.5 Flash-Lite, 3.0 Flash, etc.
-- `/toggle`: Enable or disable VectorDB retrieval for the next message.
-- `/save`: Export the current conversation to `chats/`.
-- `/resume`: Reconstruct conversation history from a saved JSON.
+The synchronous work (reading a file, finding headers, splitting lines) is
+handed off to a background process pool. The main thread's async event loop
+simply manages the IOUs ("Futures") for these tasks, ensuring all CPU cores are
+utilized simultaneously to crunch the text without blocking the orchestrator.
 
-## Project Structure
+### 2. Distributed Local Embedding
 
-- `src/docs_vectordb/`: Core source code.
-  - `generate_vectordb.py`: Orchestrator (Phase 1-4).
-  - `doc_search.py`: Single-shot AI search tool.
-  - `doc_search_conversation.py`: Stateful chat interface.
-  - `embedding_server.py`: Scalable PyTorch inference server.
-  - `embed_pytorch.py`: Parallel client for local models.
-  - `embed_gemini.py`: Asynchronous client for Google GenAI.
-- `tests/`: Comprehensive suite (39+ tests) including unit, integration, and CLI consistency checks.
-- `database/`: Local LanceDB vector storage.
-- `chunks/`: Intermediate semantic fragments (gitignored).
+Generating local PyTorch embeddings (`embed_pytorch.py`) is the most
+computationally expensive step. Instead of loading the `SentenceTransformer`
+model directly into the main embedding script, the orchestrator acts as a local
+load balancer.
 
-## Maintenance & Verification
+```text
+[Orchestrator: generate_vectordb.py]
+   |
+   |-- Spawns independent Flask servers
+   v
+[Worker 5000] (Waitress/Flask + MPNet Model)
+[Worker 5001] (Waitress/Flask + MPNet Model)
+[Worker 5002] (Waitress/Flask + MPNet Model)
+   ^
+   |-- ThreadPoolExecutor routes HTTP POST batches
+   |
+[embed_pytorch.py] (Reads JSON chunks)
 
-### Health Check
-Verify database integrity and count vectors per source:
-```powershell
-database-healthcheck
 ```
 
-### Testing & Linting
-Run the unified test runner for static analysis (mypy) and unit tests:
-```powershell
-python run_tests.py
-```
+1. **Worker Spawning:** `generate_vectordb.py` uses `subprocess` to spin up
+   multiple instances of `embedding_server.py` on local ports. Each server is
+an isolated Waitress/Flask app running its own instance of the model in a
+separate memory space.
+2. **Batch Routing:** `embed_pytorch.py` groups the text chunks into safe batch
+   sizes. It then uses a standard `ThreadPoolExecutor` to fire these batches
+off to the local servers via HTTP POST requests.
+3. **Stateless Processing:** Because making HTTP requests is I/O-bound, the
+   thread pool works perfectly here. The actual heavy matrix multiplication
+happens entirely outside the main script's GIL inside the separate worker
+processes.
 
-## Technical Specifications
-- **Gemini Embeddings:** 3072 dimensions, 1M TPM rate limit.
-- **PyTorch Embeddings:** 768 dimensions (`all-mpnet-base-v2`).
-- **Batching:** 256 chunks per inference request (VRAM Protection), 1000 chunks per DB transaction.
-- **Database:** LanceDB (Serverless).
+## Installation
+
+The project relies on the `uv` Python manager for fast dependency resolution. The
+configuration includes a custom index to pull the correct CUDA 13.0 wheels for
+PyTorch directly.
+
+To install the dependencies and register the CLI tools directly into your
+system environment, run the following in the project root:
+
+```bash
+uv pip install --system .
+
+```
+The scripts can also be run with `uv run <script_name>` if you prefer not to
+install system-wide. The Python virtual environment will be used automatically.
+It is also possible to activate the virtual environment with the activate
+scripts and run Python commands without `uv`.
+
+## CLI Tools
+
+Installing the project via `uv` registers several command-line interfaces
+directly into the environment path. These commands provide direct access to the
+database and AI search features without needing to invoke the underlying Python
+scripts manually.
+
+* **`database-healthcheck`**: A diagnostic command that verifies the LanceDB
+connection, checks table integrity, and ensures the vector indices are properly
+initialized.
+* **`doc-retrieval`**: The raw search interface. It takes a search query,
+embeds it into a vector using the chosen backend, and returns the raw JSON
+chunks retrieved from LanceDB. This command is heavily utilized under the hood
+by the AI scripts but is exposed here for rapid debugging and manual vector
+queries.
+* **`doc-search`**: The primary one-shot AI query tool. It uses `doc-retrieval`
+to fetch local context and immediately passes it to the Gemini 2.5 Flash Lite
+model. It is optimized for speed and outputs concise, formatted Markdown. If
+the database lacks the answer, it generates specific `ripgrep` fallback
+commands.
+* **`doc-search-conversation`**: The interactive, stateful chat mode. This
+command launches a continuous console session with several built-in commands:
+* `/toggle`: Turns local vector retrieval on or off, allowing the model to
+switch between acting as a strict documentation assistant and a general coding
+assistant.
+* `/model`: Swaps the active Gemini model mid-conversation.
+* `/save`: Serializes the current conversation history to a JSON file in the
+`chats/` directory.
+* `/resume`: Displays a table of recent chat sessions and reloads the history
+to continue a previous troubleshooting session.
+
+
+* **`service-wrapper`**: A standalone utility to spin up a local PyTorch
+Waitress/Flask embedding server independently. When `doc-retrieval` needs to
+embed a user's terminal query, loading the PyTorch model into memory from
+scratch has significant cold-start latency. By keeping a local
+server running in the background via `service-wrapper`, the CLI tools can
+instantly POST the query to the active model, drastically speeding up the
+response time for `doc-search` and `doc-search-conversation`.
