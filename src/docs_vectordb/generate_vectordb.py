@@ -17,12 +17,14 @@ project_root = Path(__file__).parent.parent.parent
 src_dir = project_root / "src" / "docs_vectordb"
 
 def run_script(script_name, *args):
-    """Runs a python script as a subprocess. Captures stdout."""
+    """Runs a python script as a subprocess. Captures stdout for data, pipes stderr for UI."""
     script_path = src_dir / script_name
+    # We use subprocess.PIPE for stdout to capture the JSON results, 
+    # but we don't capture stderr so the sub-script's Rich output goes to the TTY.
     cmd = [sys.executable, str(script_path)] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
     if result.returncode != 0:
-        console.print(f"[red]Error running {script_name}:[/red]\n{result.stderr}")
+        # Note: error message will already be on stderr from the sub-process
         return None
     return result.stdout.strip()
 
@@ -39,7 +41,8 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     The resulting database is stored in the project's database/ directory.
     """)
 @click.option("--embedder", type=click.Choice(["gemini", "pytorch"]), default="gemini", help="Backend to use for embeddings.")
-def main(embedder):
+@click.option("--rebuild", is_flag=True, help="Drop existing table and rebuild from scratch.")
+def main(embedder, rebuild):
     start_run = time.time()
     logs_dir = project_root / "logs"
     logs_dir.mkdir(exist_ok=True)
@@ -53,7 +56,10 @@ def main(embedder):
             f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
     console.print(f"[bold blue]Starting Vector DB Generation (Embedder: {embedder})[/bold blue]")
-    log_master(f"Starting run with embedder: {embedder}")
+    if rebuild:
+        console.print("[bold red]REBUILD MODE: Existing data will be overwritten.[/bold red]")
+    
+    log_master(f"Starting run with embedder: {embedder} (Rebuild: {rebuild})")
     
     # 0. Clean up previous runs
     chunks_dir = project_root / "chunks"
@@ -69,7 +75,11 @@ def main(embedder):
         response = db.list_tables()
         available_tables = response.tables if hasattr(response, 'tables') else response
         if TABLE_NAME in available_tables:
-            console.print(f"[cyan]Table '{TABLE_NAME}' exists. Resuming ingestion...[/cyan]")
+            if rebuild:
+                db.drop_table(TABLE_NAME)
+                console.print(f"[yellow]Dropped existing table: '{TABLE_NAME}'[/yellow]")
+            else:
+                console.print(f"[cyan]Table '{TABLE_NAME}' exists. Resuming ingestion...[/cyan]")
     except Exception as e:
         console.print(f"[red]Could not handle table initialization:[/red] {e}")
 
@@ -134,12 +144,12 @@ def main(embedder):
     with list_path.open("w", encoding="utf-8-sig") as f:
         json.dump([str(p) for p in chunk_files], f)
 
-    with console.status(f"[cyan]Embedding and storing into LanceDB...[/cyan]"):
-        if embedder == "gemini":
-            raw_stats = run_script("embed_gemini.py", str(list_path))
-        else:
-            # PyTorch now also uses the JSON list
-            raw_stats = run_script("embed_pytorch.py", str(list_path))
+    extra_args = ["--force"] if rebuild else []
+    if embedder == "gemini":
+        raw_stats = run_script("embed_gemini.py", str(list_path), *extra_args)
+    else:
+        # PyTorch now also uses the JSON list
+        raw_stats = run_script("embed_pytorch.py", str(list_path), *extra_args)
             
     if not raw_stats:
         console.print("[red]Phase 3 Failed: Embedding script returned no results.[/red]")
@@ -208,11 +218,10 @@ def main(embedder):
     summary.add_row("Total Files", str(len(target_files)))
     summary.add_row("Total Chunks", str(len(chunk_files)))
     summary.add_row("Vectors Stored", str(stats.get("vectors_stored", 0)))
-    summary.add_row("Tokens Sent (est)", str(stats.get("tokens_sent", 0)))
-    summary.add_row("Billable Chars", str(stats.get("billable_chars", 0)))
     summary.add_row("Phase: Assembly", f"{t_assemble:.2f}s")
     summary.add_row("Phase: Chunking", f"{t_chunk:.2f}s")
-    summary.add_row("Phase: Embedding", f"{t_embed:.2f}s")
+    summary.add_row("Phase: Embedding Only", f"{stats.get('embedding_time', 0):.2f}s")
+    summary.add_row("Phase: Database Storage", f"{stats.get('storage_time', 0):.2f}s")
     summary.add_row("Phase: Indexing", f"{t_index:.2f}s")
     summary.add_row("Total Runtime", f"{total_time:.2f}s")
     

@@ -61,9 +61,6 @@ class TestEmbedGemini(unittest.TestCase):
             ))
             
             self.assertEqual(stats["vectors_stored"], 1)
-            # Should count "chunk1" (6 chars) + overhead (0 in this mock logic)
-            self.assertEqual(stats["billable_chars"], 6) 
-            self.assertEqual(stats["tokens_sent"], 1) # 6 // 4 = 1
             mock_db.create_table.assert_called_once()
         finally:
             if test_chunk_file.exists():

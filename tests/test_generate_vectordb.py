@@ -15,14 +15,12 @@ class TestGenerateVectorDB(unittest.TestCase):
         mock_run.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("docs_vectordb.generate_vectordb.console.print")
-    def test_run_script_failure(self, mock_print, mock_run):
+    def test_run_script_failure(self, mock_run):
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "error"
         
         result = run_script("test.py", "arg1")
         self.assertIsNone(result)
-        mock_print.assert_called_once()
 
     @patch("docs_vectordb.generate_vectordb.run_script")
     @patch("docs_vectordb.generate_vectordb.lancedb.connect")

@@ -35,7 +35,9 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
     and stores in LanceDB.
     """)
 @click.argument("file_paths_json", type=click.Path(path_type=Path, exists=True))
-def main(file_paths_json):
+@click.option("--force", is_flag=True, help="Force rebuild by skipping existing document checks.")
+@click.option("--batch-size", default=1000, help="Number of chunks to batch before embedding/storing.")
+def main(file_paths_json, force, batch_size):
     # Ensure sys is available for stdout
     import sys
     
@@ -51,22 +53,22 @@ def main(file_paths_json):
         
     if not file_paths:
         print_log("No files to process.")
-        sys.stdout.write(json.dumps({"embedder": "pytorch", "vectors_stored": 0, "duration": 0}) + "\n")
+        sys.stdout.write(json.dumps({"embedder": "pytorch", "vectors_stored": 0, "duration": 0, "embedding_time": 0, "storage_time": 0}) + "\n")
         return
         
     db = lancedb.connect(uri=URI)
     
     # Pre-fetch existing source documents to allow resuming
     existing_sources = set()
-    try:
-        if TABLE_NAME in db.list_tables():
-            tbl = db.open_table(TABLE_NAME)
-            # Safely get existing sources using Polars
-            df = tbl.to_polars().select(["source_doc"]).unique()
-            existing_sources = set(df["source_doc"].to_list())
-            print_log(f"Found {len(existing_sources)} already processed documents.")
-    except Exception as e:
-        print_log(f"Warning: Could not check existing documents: {e}")
+    if not force:
+        try:
+            if TABLE_NAME in db.list_tables():
+                tbl = db.open_table(TABLE_NAME)
+                df = tbl.to_polars().select(["source_doc"]).unique()
+                existing_sources = set(df["source_doc"].to_list())
+                print_log(f"Found {len(existing_sources)} already processed documents.")
+        except Exception as e:
+            print_log(f"Warning: Could not check existing documents: {e}")
 
     table_exists = TABLE_NAME in db.list_tables()
     
@@ -85,101 +87,144 @@ def main(file_paths_json):
     
     total_inserted = 0
     start_time = time.time()
+    embedding_time = 0.0
+    storage_time = 0.0
     
-    for chunk_file in file_paths:
-        if not chunk_file.exists():
-            continue
-
-        try:
-            with chunk_file.open("r", encoding="utf-8") as f:
-                chunk_data = json.load(f)
-        except Exception as e:
-            print_log(f"Failed to read {chunk_file}: {e}")
-            continue
-            
-        # Handle formats
-        if isinstance(chunk_data, list):
-            chunks = chunk_data
-            source_doc = chunk_file.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
-            program = None
-        else:
-            chunks = chunk_data.get("chunks", [])
-            source_doc = chunk_data.get("source_doc", "unknown")
-            program = chunk_data.get("program")
-            
-        if not chunks:
-            continue
-
-        if source_doc in existing_sources:
-            continue
-            
-        embeddings = None
-        if use_server:
+    # We use stderr=True and force_terminal so progress output doesn't interfere with the JSON stdout
+    console = Console(stderr=True, force_terminal=True)
+    
+    # Pre-scan and group into batches
+    work_items = []
+    total_chunks = 0
+    
+    with console.status("[cyan]Scanning documentation files...[/cyan]") as status:
+        for chunk_file in file_paths:
+            if not chunk_file.exists():
+                continue
             try:
-                response = requests.post(server_url, json={"queries": chunks}, timeout=120)
-                response.raise_for_status()
-                embeddings = response.json()["embeddings"]
+                with chunk_file.open("r", encoding="utf-8") as f:
+                    chunk_data = json.load(f)
             except Exception as e:
-                print_log(f"Error calling embedding server for {source_doc}: {e}. Skipping server for this file.")
-                # Fallback to local if server fails mid-run
-                from sentence_transformers import SentenceTransformer
-                model = SentenceTransformer("all-mpnet-base-v2")
-                use_server = False
-                embeddings = model.encode(chunks)
-        else:
-            embeddings = model.encode(chunks)
-        
-        if embeddings is None:
-            continue
+                print_log(f"Failed to read {chunk_file}: {e}")
+                continue
 
-        data = []
-        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            # If embedding is a numpy array (from local model), convert to list
-            if hasattr(embedding, "tolist"):
-                vector = embedding.tolist()
+            if isinstance(chunk_data, list):
+                chunks = chunk_data
+                source_doc = chunk_file.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
+                program = None
             else:
-                vector = embedding
+                chunks = chunk_data.get("chunks", [])
+                source_doc = chunk_data.get("source_doc", "unknown")
+                program = chunk_data.get("program")
 
-            row = {
-                "id": f"{source_doc}_{i:04d}",
-                "source_doc": source_doc,
-                "text": chunk_text,
-                "vector": vector
-            }
-            if program:
-                row["program"] = program
-            data.append(row)
+            if chunks and (force or source_doc not in existing_sources):
+                work_items.append({
+                    "chunks": chunks,
+                    "source_doc": source_doc,
+                    "program": program
+                })
+                total_chunks += len(chunks)
+
+    if total_chunks == 0:
+        print_log("Nothing new to process.")
+        sys.stdout.write(json.dumps({"embedder": "pytorch", "vectors_stored": 0, "duration": 0, "embedding_time": 0, "storage_time": 0}) + "\n")
+        return
+
+    processed_chunks = 0
+    
+    # Multi-file batching logic
+    pending_data = []
+    
+    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn
+    
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        TextColumn("[dim]{task.completed}/{task.total}"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        console=console
+    )
+
+    with progress:
+        task_id = progress.add_task("Processing...", total=total_chunks)
+        for item in work_items:
+            current_chunks = item["chunks"]
+            source_doc = item["source_doc"]
+            program = item["program"]
+
+            # 1. Embedding
+            progress.update(task_id, description=f"Embedding {source_doc}")
             
-        try:
-            if table_exists:
-                table = db.open_table(TABLE_NAME)
+            t_emb0 = time.time()
+            embeddings = None
+            if use_server:
                 try:
-                    table.add(data)
+                    response = requests.post(server_url, json={"queries": current_chunks}, timeout=120)
+                    response.raise_for_status()
+                    embeddings = response.json()["embeddings"]
                 except Exception as e:
-                    if "program" in str(e) and any("program" in r for r in data):
-                        print_log("Schema mismatch on 'program' column. Retrying without it.")
-                        for r in data: r.pop("program", None)
-                        table.add(data)
-                    else:
-                        raise e
+                    print_log(f"Server error for {source_doc}: {e}. Falling back to local.")
+                    from sentence_transformers import SentenceTransformer
+                    model = SentenceTransformer("all-mpnet-base-v2")
+                    use_server = False
+                    embeddings = model.encode(current_chunks)
             else:
-                db.create_table(TABLE_NAME, data=data)
-                table_exists = True
+                embeddings = model.encode(current_chunks)
+            embedding_time += (time.time() - t_emb0)
             
-            total_inserted += len(data)
-            print_log(f"Processed {source_doc}: {len(data)} vectors.")
-        except Exception as e:
-            print_log(f"Critical error storing data for {source_doc}: {e}")
-            # We don't exit here to try to finish other files, but we log it
-        
+            if embeddings is None: continue
+
+            # 2. Alignment
+            for i, (chunk_text, embedding) in enumerate(zip(current_chunks, embeddings)):
+                vector = embedding.tolist() if hasattr(embedding, "tolist") else embedding
+                row = {
+                    "id": f"{source_doc}_{i:04d}",
+                    "source_doc": source_doc,
+                    "text": chunk_text,
+                    "vector": vector
+                }
+                if program: row["program"] = program
+                pending_data.append(row)
+
+            # 3. Batch Store
+            if len(pending_data) >= batch_size or item == work_items[-1]:
+                progress.update(task_id, description=f"Storing {source_doc}")
+                t_store0 = time.time()
+                try:
+                    if table_exists:
+                        table = db.open_table(TABLE_NAME)
+                        try:
+                            table.add(pending_data)
+                        except Exception as e:
+                            if "program" in str(e):
+                                print_log("Schema mismatch. Stripping 'program' column.")
+                                for r in pending_data: r.pop("program", None)
+                                table.add(pending_data)
+                            else: raise e
+                    else:
+                        db.create_table(TABLE_NAME, data=pending_data)
+                        table_exists = True
+                    
+                    total_inserted += len(pending_data)
+                    print_log(f"Committed batch: {len(pending_data)} vectors.")
+                    pending_data = [] # Reset batch
+                except Exception as e:
+                    print_log(f"Critical error during batch store: {e}")
+                    pending_data = []
+                storage_time += (time.time() - t_store0)
+
+            # Update completion status
+            progress.update(task_id, completed=processed_chunks + len(current_chunks))
+            processed_chunks += len(current_chunks)
+
     duration = time.time() - start_time
     
     stats = {
         "embedder": "pytorch",
         "vectors_stored": total_inserted,
         "duration": duration,
-        "tokens_sent": 0,
-        "billable_chars": 0
+        "embedding_time": embedding_time,
+        "storage_time": storage_time
     }
     sys.stdout.write(json.dumps(stats) + "\n")
     sys.stdout.flush()
