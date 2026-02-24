@@ -7,7 +7,7 @@ from pathlib import Path
 import rich_click as click
 from rich.console import Console
 from rich.traceback import install as trace_install
-from .chunking_utils import get_timestamp, setup_shared_logging
+from docs_vectordb.chunking_utils import get_timestamp, setup_shared_logging
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -49,7 +49,18 @@ def main(file_paths_json):
     db = lancedb.connect(uri=URI)
     table_exists = TABLE_NAME in db.list_tables()
     
-    model = SentenceTransformer("all-mpnet-base-v2")
+    import requests
+    server_url = "http://127.0.0.1:5000/encode"
+    use_server = True
+    
+    try:
+        requests.get("http://127.0.0.1:5000/health", timeout=2).raise_for_status()
+        print_log("Connected to local embedding server.")
+    except Exception as e:
+        print_log(f"Server not available: {e}. Falling back to local SentenceTransformer.")
+        use_server = False
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-mpnet-base-v2")
     
     total_inserted = 0
     start_time = time.time()
@@ -59,20 +70,40 @@ def main(file_paths_json):
             continue
 
         with chunk_file.open("r", encoding="utf-8") as f:
-            chunks = json.load(f)
+            chunk_data = json.load(f)
+            
+        # Handle both old list format and new dict format for backward compatibility during testing
+        if isinstance(chunk_data, list):
+            chunks = chunk_data
+            source_doc = chunk_file.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
+            program = "unknown"
+        else:
+            chunks = chunk_data.get("chunks", [])
+            source_doc = chunk_data.get("source_doc", "unknown")
+            program = chunk_data.get("program", "unknown")
             
         if not chunks:
             continue
             
-        embeddings = model.encode(chunks)
+        if use_server:
+            try:
+                # Batch request to server. 
+                # If chunks is very large, consider chunking the requests, but typical files are reasonable.
+                response = requests.post(server_url, json={"queries": chunks}, timeout=120)
+                response.raise_for_status()
+                embeddings = response.json()["embeddings"]
+            except Exception as e:
+                print_log(f"Error calling embedding server for {source_doc}: {e}")
+                continue
+        else:
+            embeddings = model.encode(chunks)
         
         data = []
-        source_name = chunk_file.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
-        
         for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
             data.append({
-                "id": f"{source_name}_{i:04d}",
-                "source_doc": source_name,
+                "id": f"{source_doc}_{i:04d}",
+                "source_doc": source_doc,
+                "program": program,
                 "text": chunk_text,
                 "vector": embedding.tolist()
             })
@@ -85,7 +116,7 @@ def main(file_paths_json):
             table_exists = True
             
         total_inserted += len(data)
-        print_log(f"Processed {source_name}: {len(data)} vectors.")
+        print_log(f"Processed {source_doc}: {len(data)} vectors.")
         
     duration = time.time() - start_time
     

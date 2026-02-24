@@ -46,9 +46,9 @@ def split_long_unit(unit: List[str], max_lines: int, overlap: int = 5) -> List[L
         start += max_lines - overlap
     return split_units
 
-def write_chunks_to_json(chunks: List[str], output_path: Path) -> int:
+def write_chunks_to_json(chunks: List[str], output_path: Path, source_doc: str = "", program: str = "unknown") -> int:
     """
-    Writes a list of chunk strings to a JSON file.
+    Writes a list of chunk strings to a JSON file along with metadata.
     
     Side-effects:
         - Creates or overwrites the file at `output_path`.
@@ -56,14 +56,21 @@ def write_chunks_to_json(chunks: List[str], output_path: Path) -> int:
     Args:
         chunks (List[str]): The text chunks to save.
         output_path (Path): The destination file path.
+        source_doc (str): The name of the source document.
+        program (str): The program name metadata.
         
     Returns:
         int: The number of chunks written. Returns 0 if the list is empty.
     """
     if not chunks:
         return 0
+    data = {
+        "source_doc": source_doc,
+        "program": program,
+        "chunks": chunks
+    }
     with output_path.open("w", encoding="utf-8") as out:
-        json.dump(chunks, out, indent=2)
+        json.dump(data, out, indent=2)
     return len(chunks)
 
 async def process_files_async(worker_func: Callable[[Path, Path], int], file_paths: List[Path], output_dir: Path) -> int:

@@ -7,13 +7,48 @@ from pathlib import Path
 import rich_click as click
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.theme import Theme
 from google import genai
 from google.genai import types
 
 # Constants
-MODEL_ID = "gemini-3-flash-preview"
+MODEL_ID = "gemini-2.5-flash-lite"
 URI = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
 
+"""
+COLOR REFERENCE TABLE
+| Theme Key             | Index | Rich Name          | Hex Code |
+|-----------------------|-------|--------------------|----------|
+| markdown, header      | 151   | dark_sea_green_3d  | #afd7af  |
+| markdown.h1, .strong  | 35    | spring_green_4     | #00875f  |
+| markdown.h2, .h3      | 179   | light_goldenrod_3  | #d7af5f  |
+| markdown.code         | 33    | dodger_blue_1      | #0087ff  |
+| markdown.link         | 179   | light_goldenrod_3  | #d7af5f  |
+| status.cyan           | 39    | deep_sky_blue_1    | #00afff  |
+| status.magenta        | 72    | dark_cyan          | #5f8787  |
+| dim, info, query      | 103   | slate_gray_3       | #8787af  |
+| error                 | 131   | indian_red         | #af5f5f  |
+"""
+custom_theme = Theme({
+    "markdown": "color(151)",
+    "markdown.code": "color(33)",
+    "markdown.emph": "italic color(179)",
+    "markdown.strong": "color(35)",
+    "markdown.header": "color(179)",
+    "markdown.h1": "bold color(35)",
+    "markdown.h2": "color(179)",
+    "markdown.h3": "color(179)",
+    "markdown.link": "color(179)",
+    "status.cyan": "color(39)",
+    "status.magenta": "color(72)",
+    "dim": "color(103)",
+    "info": "color(103)",
+    "warning": "color(179)",
+    "error": "bold color(131)",
+    "header": "color(151)",
+    "query": "bold color(103)"
+})
+console = Console(theme=custom_theme, width=80)
 console = Console()
 
 # The system prompt derived from the skill definition
@@ -98,7 +133,7 @@ def main(query, top_n, embedder, raw):
     if raw:
         print(answer)
     else:
-        console.print(Markdown(answer))
+        console.print(Markdown(answer, code_theme="sata-dark"))
         console.print(f"\n[dim italic]Latency: {latency:.2f}s | Context Chunks: {len(context_chunks)}[/dim italic]")
 
 if __name__ == "__main__":

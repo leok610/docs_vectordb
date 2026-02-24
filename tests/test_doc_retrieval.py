@@ -52,10 +52,12 @@ class TestDocRetrieval(unittest.TestCase):
             # Since main is decorated, we'll call it directly and hope the mock works.
             from click.testing import CliRunner
             runner = CliRunner()
-            result = runner.invoke(main, ["query"])
+            result = runner.invoke(main, ["query", "--embedder", "gemini"])
             
             self.assertEqual(result.exit_code, 0)
             data = json.loads(result.output)
+            if "error" in data:
+                raise RuntimeError(data["error"])
             self.assertEqual(len(data), 1)
             self.assertEqual(data[0]["chunk_id"], "id1")
 

@@ -143,7 +143,7 @@ def main(embedder):
             raw_stats = run_script("embed_gemini.py", str(list_path))
         else:
             # PyTorch now also uses the JSON list
-            raw_stats = run_script("embed_and_store.py", str(list_path))
+            raw_stats = run_script("embed_pytorch.py", str(list_path))
             
     if not raw_stats:
         raise RuntimeError("Phase 3 Failed: Embedding script failed to produce stats output.")

@@ -136,15 +136,22 @@ async def embed_and_store_gemini(
         if not path_obj.exists():
             continue
             
-        source_name = path_obj.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
-        
+        with path_obj.open("r", encoding="utf-8") as f:
+            chunk_data = json.load(f)
+            
+        if isinstance(chunk_data, list):
+            chunks = chunk_data
+            source_name = path_obj.stem.replace("_chunks", "").replace("_rst_chunks", "").replace("_md_chunks", "").replace("_txt_chunks", "")
+            program = "unknown"
+        else:
+            chunks = chunk_data.get("chunks", [])
+            source_name = chunk_data.get("source_doc", "unknown")
+            program = chunk_data.get("program", "unknown")
+            
         if source_name in existing_sources:
             # We don't have accurate char/token counts for skipped files here,
             # but we skip them to save time and quota.
             continue
-
-        with path_obj.open("r", encoding="utf-8") as f:
-            chunks = json.load(f)
             
         if not chunks:
             continue
@@ -173,6 +180,7 @@ async def embed_and_store_gemini(
                 data.append({
                     "id": f"{source_name}_{vector_count:04d}",
                     "source_doc": source_name,
+                    "program": program,
                     "text": chunks[vector_count],
                     "vector": vec
                 })

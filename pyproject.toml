@@ -30,6 +30,7 @@ url = "https://download.pytorch.org/whl/cu130"
 dev = [
     "mypy>=1.19.1",
     "types-requests>=2.31.0.6",
+    "types-waitress>=3.0.1.20250801",
 ]
 
 [tool.hatch.build.targets.editable]
@@ -39,4 +40,5 @@ path = ["src"]
 database-healthcheck = "docs_vectordb.healthcheck:main"
 doc-retrieval = "docs_vectordb.doc_retrieval:main"
 doc-search = "docs_vectordb.doc_search:main"
+doc-search-conversation = "docs_vectordb.doc_search_conversation:main"
 service-wrapper = "docs_vectordb.server_cli:main"

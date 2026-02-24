@@ -5,7 +5,7 @@ from pathlib import Path
 import rich_click as click
 from rich.console import Console
 from rich.traceback import install as trace_install
-from .chunking_utils import (
+from docs_vectordb.chunking_utils import (
     split_long_unit, 
     write_chunks_to_json, 
     process_files_async, 
@@ -94,7 +94,14 @@ def process_single_indent(file_path: Path, output_dir: Path) -> int:
     final_chunks = [" ".join(chunk_lines) for chunk_lines in chunks_lists]
     
     output_path = output_dir / f"{file_path.stem}_chunks.json"
-    return write_chunks_to_json(final_chunks, output_path)
+    
+    try:
+        ref_doc_path = Path("C:/git-repositories/leok610/ref/doc")
+        program = file_path.relative_to(ref_doc_path).parts[0]
+    except Exception:
+        program = "unknown"
+        
+    return write_chunks_to_json(final_chunks, output_path, source_doc=file_path.stem, program=program)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 

@@ -34,7 +34,7 @@ class TestChunkingUtils(unittest.TestCase):
         
         with output_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        self.assertEqual(data, chunks)
+        self.assertEqual(data["chunks"], chunks)
         
         shutil.rmtree(test_dir)
 

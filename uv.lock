@@ -315,6 +315,7 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "types-requests" },
+    { name = "types-waitress" },
 ]
 
 [package.metadata]
@@ -338,6 +339,7 @@ requires-dist = [
 dev = [
     { name = "mypy", specifier = ">=1.19.1" },
     { name = "types-requests", specifier = ">=2.31.0.6" },
+    { name = "types-waitress", specifier = ">=3.0.1.20250801" },
 ]
 
 [[package]]
@@ -1840,6 +1842,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/73/de/b9d7a68ad39092368fb21dd6194b362b98a1daeea5dcfef5e1adb5031c7e/types-urllib3-1.26.25.14.tar.gz", hash = "sha256:229b7f577c951b8c1b92c1bc2b2fdb0b49847bd2af6d1cc2a2e3dd340f3bda8f", size = 11239, upload-time = "2023-07-20T15:19:31.307Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/7b/3fc711b2efea5e85a7a0bbfe269ea944aa767bbba5ec52f9ee45d362ccf3/types_urllib3-1.26.25.14-py3-none-any.whl", hash = "sha256:9683bbb7fb72e32bfe9d2be6e04875fbe1b3eeec3cbb4ea231435aa7fd6b4f0e", size = 15377, upload-time = "2023-07-20T15:19:30.379Z" },
+]
+
+[[package]]
+name = "types-waitress"
+version = "3.0.1.20250801"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/d4/ec386bf1166249c59fd6fc6bb83b174da33540a272d4b45b6ecac3978a7c/types_waitress-3.0.1.20250801.tar.gz", hash = "sha256:f919fda09e44798771d8ac54bb8573c165f1a1bc1aa9bfbf4296603db59455be", size = 14215, upload-time = "2025-08-01T03:48:11.975Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/14/0bd9a8de7c618de4434b3954eedf2ba11a962d5b1ab2311d7c10b8402bdc/types_waitress-3.0.1.20250801-py3-none-any.whl", hash = "sha256:17830a3bf096a967368cfc4dfaf19e2ab6cde8ac880747ebb47c01ca85704d9f", size = 17477, upload-time = "2025-08-01T03:48:10.869Z" },
 ]
 
 [[package]]
