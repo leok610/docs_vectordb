@@ -9,11 +9,11 @@ import rich_click as click
 app = Flask(__name__)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger("embedding-server")
 
 logger.info("Loading SentenceTransformer model 'all-mpnet-base-v2'...")
-model = SentenceTransformer("all-mpnet-base-v2")
+model = SentenceTransformer("C:/git-repositories/forks/all-mpnet-base-v2")
 logger.info("Model loaded successfully.")
 
 @app.route('/encode', methods=['POST'])
