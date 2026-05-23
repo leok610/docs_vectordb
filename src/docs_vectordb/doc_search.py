@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 # Constants
-MODEL_ID = "gemini-2.5-flash-lite"
+MODEL_ID = "gemini-3.1-flash-lite"
 URI = "C:/git-repositories/leok610/docs_vectordb/database/docs_lancedb"
 
 """

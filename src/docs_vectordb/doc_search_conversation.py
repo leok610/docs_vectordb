@@ -17,10 +17,9 @@ from rich.theme import Theme
 
 # Constants
 class GeminiModel(str, Enum):
-    FLASH_25 = "gemini-2.5-flash"
-    LITE_25 = "gemini-2.5-flash-lite"
-    FLASH_3 = "gemini-3-flash-preview"
-    PRO_3 = "gemini-3-pro-preview"
+    LITE_3 = "gemini-3.1-flash-lite"
+    FLASH_3 = "gemini-3.5-flash"
+    PRO_3 = "gemini-3.1-pro-preview"
 
 """
 COLOR REFERENCE TABLE
@@ -151,7 +150,7 @@ def load_history(filepath):
 
 def run_chat(initial_query=None):
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    current_model = GeminiModel.LITE_25
+    current_model = GeminiModel.LITE_3
 
     def start_session(model_id, history=None):
         return client.chats.create(
